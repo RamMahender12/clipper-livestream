@@ -129,6 +129,10 @@ DEFAULTS: dict = {
         "cut": True,
         "min_seconds": 1.0,  # ignore shorter music markers
     },
+    "digest": {
+        "enabled": True,  # one Telegram message each morning: posts, views, pools, spend, what's waiting
+        "hour": 9,  # local hour ([posting].timezone) it's sent at
+    },
     "review_bot": {
         "enabled": True,  # approve/reject clips from Telegram (needs TELEGRAM_REVIEW_* secrets)
         "max_per_hour": 12,  # clips sent for review per hour (respects quiet hours)

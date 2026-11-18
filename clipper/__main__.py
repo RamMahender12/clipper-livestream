@@ -19,6 +19,7 @@
   clipper twitch-clips         harvest the most-viewed Twitch viewer clips now
   clipper instagram-tokens     make non-expiring Instagram Page tokens, check all tokens
   clipper takedowns            check every post for takedowns now
+  clipper digest [--send]      show (or send) the morning digest now
   clipper resume <who> <where> post to an account again after a takedown pause
   clipper service install|status|restart|stop|start|uninstall
                                run unattended in the background (macOS launchd)
@@ -223,6 +224,11 @@ def cmd_run(args, cfg, review_only: bool = False) -> int:
         pipeline.RenderWorker(db, cfg, stop, i).start()
     if not review_only and not args.no_post:
         scheduler.Scheduler(db, cfg, stop).start()
+        if notify.configured() and cfg["digest"].get("enabled"):
+            from .digest import DigestSender
+
+            DigestSender(db, cfg, stop).start()
+            log.info("morning digest ON (%s:00 %s)", cfg["digest"].get("hour", 9), cfg["posting"].get("timezone"))
         from .takedowns import TakedownWatcher
 
         TakedownWatcher(db, cfg, stop).start()
@@ -390,6 +396,18 @@ def cmd_instagram_tokens(args, cfg) -> int:
     for w in warnings:
         print("WARNING:", w)
     return 1 if warnings else 0
+
+
+def cmd_digest(args, cfg) -> int:
+    """Show the morning digest now (--send also sends it to Telegram)."""
+    from . import digest
+
+    db = open_db(cfg)
+    if args.send:
+        print("sent" if digest.send(db, cfg) else "not sent (Telegram not set up?)")
+    else:
+        print(digest.build(db, cfg)[0])
+    return 0
 
 
 def cmd_takedowns(args, cfg) -> int:
@@ -649,6 +667,8 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("twitch-clips", help="harvest the most-viewed Twitch viewer clips now")
     sub.add_parser("instagram-tokens", help="make non-expiring Instagram Page tokens and check all tokens")
     sub.add_parser("takedowns", help="check every post for takedowns now")
+    p_digest = sub.add_parser("digest", help="show the morning digest now")
+    p_digest.add_argument("--send", action="store_true", help="also send it to Telegram")
     p_resume = sub.add_parser("resume", help="post to an account again after a takedown pause")
     p_resume.add_argument("channel", help="streamer login, e.g. lacy")
     p_resume.add_argument("platform", choices=["youtube", "instagram"])
@@ -681,7 +701,7 @@ def main(argv: list[str] | None = None) -> int:
         "instagram-accounts": cmd_instagram_accounts, "telegram": cmd_telegram,
         "campaigns": cmd_campaigns, "gemini-review": cmd_gemini_review,
         "twitch-clips": cmd_twitch_clips, "instagram-tokens": cmd_instagram_tokens,
-        "takedowns": cmd_takedowns, "resume": cmd_resume,
+        "takedowns": cmd_takedowns, "resume": cmd_resume, "digest": cmd_digest,
     }
     if args.cmd == "review":
         args.no_watch = args.no_post = True
