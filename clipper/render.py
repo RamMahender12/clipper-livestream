@@ -66,7 +66,9 @@ def render(
     facecam: list[float] | None = None,
     ass_path: Path | None = None,
     zoom: float = 1.0,
+    mute: list[tuple[float, float]] | None = None,
 ) -> Path:
+    """`mute`: (start, end) spans, in clip time, to silence (swear words)."""
     out.parent.mkdir(parents=True, exist_ok=True)
     graph = build_filtergraph(layout, width, height, fps, facecam, ass_path, zoom)
     if encoder == "h264_videotoolbox" and tools.has_encoder("h264_videotoolbox"):
@@ -78,12 +80,20 @@ def render(
         "-ss", f"{max(0.0, start):.3f}", "-t", f"{duration:.3f}", "-i", str(src),
         "-filter_complex", graph, "-map", "[v]", "-map", "0:a:0?",
         *venc, "-pix_fmt", "yuv420p",
-        "-af", "loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000",
+        "-af", audio_filter(mute),
         "-c:a", "aac", "-b:a", "160k",
         "-movflags", "+faststart", str(out),
     ]
     tools.run(cmd, timeout=900)
     return out
+
+
+def audio_filter(mute: list[tuple[float, float]] | None = None) -> str:
+    chain = "loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000"
+    if not mute:
+        return chain
+    spans = "+".join(f"between(t,{a:.3f},{b:.3f})" for a, b in mute)
+    return f"volume=enable='{spans}':volume=0,{chain}"
 
 
 def thumbnail(video: Path, out: Path, at: float = 1.0) -> Path:

@@ -229,7 +229,8 @@ def _gemini_line(notes: dict) -> str:
     g = notes.get("gemini") or {}
     if not g:
         return ""
-    return (f"A second reviewer (Gemini) watched the video: {g.get('what_happens', '')} "
+    seen = "watched the video" if str(g.get("model", "")).startswith("gemini") else "looked at frames from the video"
+    return (f"A second reviewer ({g.get('model', 'Gemini')}) {seen}: {g.get('what_happens', '')} "
             f"Visual quality {g.get('quality')}/10; cutscene: {g.get('cutscene')}; "
             f"hook matches the video: {g.get('hook_matches')}. Combined quality {notes.get('claude_quality')} "
             f"(transcript-based) + {g.get('quality')} (video) shown above.\n"

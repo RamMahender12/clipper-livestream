@@ -200,6 +200,24 @@ class HighlightTests(unittest.TestCase):
         self.assertEqual(len(moments), 1)
         self.assertAlmostEqual(moments[0].at, 100, delta=4)
 
+class CleanCaptionTests(unittest.TestCase):
+    def test_masks_and_mutes_swearing_only(self):
+        from clipper import captions, render
+        self.assertEqual(captions.mask("Are you fucking deadass? SHIT"), "Are you f*****g deadass? S**T")
+        self.assertEqual(captions.mask("Dickens flew the cockpit past Scunthorpe, assess it"),
+                         "Dickens flew the cockpit past Scunthorpe, assess it")
+        W = captions.Word
+        words = [W(0.5, 0.8, "fucking"), W(1.0, 1.2, "nice"), W(2.0, 2.3, "Shit!")]
+        ass = captions.build_ass(words, hook="what the fuck", duration=5)
+        self.assertNotIn("FUCK", ass)
+        self.assertIn("F*****G", ass)
+        self.assertIn("WHAT THE F**K", ass)
+        self.assertIn("FUCKING", captions.build_ass(words, duration=5, censor=False))
+        spans = captions.profane_spans(words)
+        self.assertEqual(len(spans), 2)
+        af = render.audio_filter(spans)
+        self.assertTrue(af.startswith("volume=enable='between(t,0.460,0.840)+between(t,1.960,2.340)':volume=0,"))
+        self.assertEqual(render.audio_filter([]), "loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000")
 
 if __name__ == "__main__":
     unittest.main()

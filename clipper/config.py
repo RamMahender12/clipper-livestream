@@ -58,6 +58,8 @@ DEFAULTS: dict = {
         "font_size": 84,
         "highlight_color": "&H0000E5FF",  # ASS BGR: yellow
         "hook_seconds": 3.0,
+        "censor_profanity": True,  # swear words shown as f*****g in the burned-in captions
+        "mute_profanity": True,  # ...and silenced in the audio (age-restriction / demonetisation risk)
     },
     "ai": {
         "enabled": True,
@@ -90,6 +92,16 @@ DEFAULTS: dict = {
         "weight": 0.6,  # share of the final score from Gemini's visual score
         "disagree_points": 3,  # scores this far apart are held for you
         "swap_hook": True,  # hook doesn't match the video: burn in Gemini's, re-render, re-check (once)
+        # backend "claude": Claude looks at frames sampled from the clip (no Google account needed)
+        "claude_model": "claude-sonnet-5-5",
+        "claude_effort": "medium",
+        "frames": 8,
+        "frame_width": 432,
+        # breaker: stop calling a failing reviewer instead of hammering it (alerts once on Telegram)
+        "max_per_hour": 60,
+        "fail_limit": 3,  # failures in a row before pausing...
+        "pause_minutes": 30,  # ...for this long
+        "policy_pause_hours": 6,  # a policy/permission rejection (HTTP 401/403) pauses it this long
     },
     "review_bot": {
         "enabled": True,  # approve/reject clips from Telegram (needs TELEGRAM_REVIEW_* secrets)
@@ -132,6 +144,7 @@ DEFAULTS: dict = {
         "min_confidence": 7,  # Claude's confidence, 1-10
         "cold_start_min_quality": 8,  # stricter bar until there's history
         "cold_start_min_confidence": 7,  # Claude's confidence needed until there's history
+        "min_gemini_quality": 6,  # the video reviewer's own score must reach this
         "max_per_day": 20,
         "cold_start_max_per_day": 6,
         "auto_reject": True,

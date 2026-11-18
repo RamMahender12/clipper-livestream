@@ -85,6 +85,12 @@ def can_post(cfg: dict, channel_cfg: dict | None, clip: dict, platform: str) -> 
     return True, "ok"
 
 
+def gemini_label(gem: dict | None) -> str:
+    from .gemini import label
+
+    return label(gem)
+
+
 def auto_gate(cfg: dict, channel_cfg: dict | None, clip: dict, notes: dict) -> tuple[bool, str]:
     """Checks a clip must pass before the AI may approve it on its own.
     These can't be switched off: anything failing them waits for a human."""
@@ -105,8 +111,25 @@ def auto_gate(cfg: dict, channel_cfg: dict | None, clip: dict, notes: dict) -> t
         g = notes.get("gemini") or {}
         return False, (f"Claude ({notes.get('claude_quality')}/10) and Gemini ({g.get('quality')}/10) "
                        "disagree; your call")
-    if (notes.get("gemini") or {}).get("hook_matches") is False:
-        return False, "Gemini says the hook doesn't match the video"
+    gem = notes.get("gemini") or {}
+    if not gem and cfg.get("gemini", {}).get("enabled"):
+        return False, ("no video check yet (it looks for age-restriction risk and that it's GTA 6)"
+                       + (f": {notes['gemini_error'][:90]}" if notes.get("gemini_error") else ""))
+    name = gemini_label(gem)
+    if gem.get("hook_matches") is False:
+        return False, f"{name} says the hook doesn't match the video"
+    if gem:
+        if "age_risk" not in gem:
+            return False, "needs a fresh video check (age-restriction and game checks)"
+        if gem.get("is_gta6") is False:
+            return False, f"{name} doesn't think this is GTA 6 gameplay"
+        if gem.get("streamer_featured") is False:
+            return False, "the streamer isn't part of the moment (campaign rule)"
+        if gem.get("age_risk") == "high":
+            return False, f"YouTube may age-restrict it ({gem.get('age_reason') or 'violence, sex or swearing'})"
+        min_gem = int(cfg.get("auto_approve", {}).get("min_gemini_quality", 0))
+        if int(gem.get("quality") or 0) < min_gem:
+            return False, f"{name}, which looked at the video, rates it {gem.get('quality')}/10 (needs {min_gem})"
     allowed = {"none"} | ({"low"} if cfg.get("auto_approve", {}).get("allow_spoiler_low") else set())
     risk = clip.get("spoiler_risk") or "unknown"
     if risk not in allowed:

@@ -20,6 +20,7 @@ def make_cfg(tmp: str) -> dict:
     cfg = config_mod._merge(config_mod.DEFAULTS, {
         "paths": {"data_dir": tmp},
         "auto_approve": {"enabled": True, "veto_minutes": 10},
+        "gemini": {"enabled": False},  # Claude-only behaviour; the Gemini gates are tested below
         "posting": {"platforms": ["export"]},
         "campaigns": [{"id": "c1", "platforms": ["youtube"], "rate_per_1k": 1.0}],
         "channels": [
@@ -152,6 +153,21 @@ class GateTests(unittest.TestCase):
         self.assertFalse(g(self.cfg, self.ch, {**self.clip, "spoiler_risk": "low"}, self.notes)[0])
         self.cfg["auto_approve"]["allow_spoiler_low"] = True
         self.assertTrue(g(self.cfg, self.ch, {**self.clip, "spoiler_risk": "low"}, self.notes)[0])
+
+    def test_gemini_gates(self):
+        g = guardrails.auto_gate
+        self.cfg["gemini"]["enabled"] = True
+        ok = {"quality": 7, "hook_matches": True, "age_risk": "low", "age_reason": "",
+              "is_gta6": True, "streamer_featured": True}
+        why = lambda gem: g(self.cfg, self.ch, self.clip, {**self.notes, **({"gemini": gem} if gem else {})})
+        self.assertTrue(why(ok)[0])
+        self.assertIn("no video check", why(None)[1])
+        self.assertIn("fresh video check", why({"quality": 7, "hook_matches": True})[1])  # reviewed before the checks
+        self.assertIn("age-restrict", why({**ok, "age_risk": "high", "age_reason": "a beating up close"})[1])
+        self.assertIn("a beating up close", why({**ok, "age_risk": "high", "age_reason": "a beating up close"})[1])
+        self.assertIn("GTA 6", why({**ok, "is_gta6": False})[1])
+        self.assertIn("streamer", why({**ok, "streamer_featured": False})[1])
+        self.assertIn("rates it 5/10", why({**ok, "quality": 5})[1])
 
 
 class RunOnceTests(unittest.TestCase):

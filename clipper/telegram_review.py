@@ -25,7 +25,7 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from . import config as config_mod, guardrails
+from . import config as config_mod, gemini as gemini_mod, guardrails
 from .db import DB
 
 log = logging.getLogger(__name__)
@@ -142,7 +142,7 @@ def caption_for(cfg: dict, clip: dict, kind: str) -> str:
     gem = notes.get("gemini") or {}
     score = f"quality {clip.get('quality') or 0}/10"
     if gem:
-        score += f" (Claude {notes.get('claude_quality')} · Gemini {gem.get('quality')})"
+        score += f" (Claude {notes.get('claude_quality')} · {gemini_mod.label(gem)} {gem.get('quality')})"
         if notes.get("tiebreak"):
             score += " · views broke the tie"
     lines = [f"#{clip['id']} {name} · {score} · spoiler {clip.get('spoiler_risk')}"]
@@ -155,12 +155,17 @@ def caption_for(cfg: dict, clip: dict, kind: str) -> str:
         lines.append(clip["source_note"][:200])
     lines.append(f"Hook: {clip.get('hook', '').strip()}")
     if notes.get("hook_swapped"):
-        lines.append(f"(Gemini's hook; Claude's \"{notes['hook_swapped'].get('from', '')}\" didn't match the video)")
+        lines.append(f"({gemini_mod.label(gem)}'s hook; the first one, \"{notes['hook_swapped'].get('from', '')}\", "
+                     "didn't match the video)")
     lines.append(f"Caption: {(clip.get('caption') or '').strip()[:350]}")
     if gem.get("what_happens"):
-        lines.append(f"Gemini saw: {gem['what_happens'][:220]}")
+        lines.append(f"{gemini_mod.label(gem)} saw: {gem['what_happens'][:220]}")
     if gem.get("better_hook"):
-        lines.append(f"Gemini hook idea: {gem['better_hook']}")
+        lines.append(f"{gemini_mod.label(gem)} hook idea: {gem['better_hook']}")
+    if gem.get("age_risk") in ("low", "high"):
+        lines.append(f"Age-restriction risk: {gem['age_risk']}" + (f" ({gem['age_reason']})" if gem.get("age_reason") else ""))
+    if gem.get("is_gta6") is False:
+        lines.append(f"⚠️ {gemini_mod.label(gem)} doesn't think this is GTA 6 gameplay")
     why = (clip.get("decision_note") or notes.get("why") or "").strip()
     if why:
         lines.append(f"AI: {why[:260]}")

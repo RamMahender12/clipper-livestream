@@ -95,6 +95,34 @@ def _ts(sec: float) -> str:
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
 
+# Swearing that gets Shorts age-restricted or demonetised when it's written on screen (and
+# muted in the audio). Slurs are handled harder elsewhere: Claude/Gemini mark them unsafe.
+PROFANE = re.compile(
+    r"^(motherfuck\w*|f+u+c+k+\w*|shit|shits|shitty|shitting|shitted|bullshit|bitch\w*|cunts?|dicks?|dickhead\w*|"
+    r"pussy|pussies|cocks?|cocksuck\w*|asshole\w*|whores?|sluts?|bastards?|nigg\w*|fags?|faggot\w*|retards?|retarded)$",
+    re.I)
+
+
+def is_profane(text: str) -> bool:
+    core = re.sub(r"[^a-z]", "", text.lower())
+    return bool(core) and bool(PROFANE.match(core))
+
+
+def mask(text: str) -> str:
+    """'fucking' -> 'f*****g': readable as a reaction, not as the word."""
+    def one(m: re.Match) -> str:
+        w = m.group(0)
+        if not is_profane(w):
+            return w
+        return w[0] + "*" * max(1, len(w) - 2) + (w[-1] if len(w) > 2 else "")
+    return re.sub(r"[A-Za-z']+", one, text)
+
+
+def profane_spans(words: list["Word"], pad: float = 0.04) -> list[tuple[float, float]]:
+    """(start, end) of every swear word, for muting the audio."""
+    return [(max(0.0, w.start - pad), w.end + pad) for w in words if is_profane(w.text)]
+
+
 def _clean(text: str) -> str:
     return text.replace("\\", "/").replace("{", "(").replace("}", ")").replace("\n", " ")
 
@@ -113,6 +141,7 @@ def build_ass(
     credit: str = "",
     duration: float = 60.0,
     shift: float = 0.0,
+    censor: bool = True,
 ) -> str:
     """`shift` moves every word time (use when the video was trimmed after transcription)."""
     cap_margin = int(height * 0.245)
@@ -142,7 +171,7 @@ def build_ass(
         lines.append(f"Dialogue: 2,{_ts(0)},{_ts(duration)},Credit,,0,0,0,,{_clean(credit)}")
     if hook:
         lines.append(
-            f"Dialogue: 3,{_ts(0)},{_ts(hook_seconds)},Hook,,0,0,0,,{{\\fad(0,250)}}{_clean(hook.upper())}"
+            f"Dialogue: 3,{_ts(0)},{_ts(hook_seconds)},Hook,,0,0,0,,{{\\fad(0,250)}}{_clean((mask(hook) if censor else hook).upper())}"
         )
     chunks = chunk_words(words, per_chunk)
     for ci, chunk in enumerate(chunks):
@@ -157,7 +186,7 @@ def build_ass(
                 continue
             parts = []
             for wj, other in enumerate(chunk):
-                t = _clean(other.text.upper())
+                t = _clean((mask(other.text) if censor else other.text).upper())
                 parts.append(f"{{\\c{highlight}}}{t}{{\\c&H00FFFFFF}}" if wj == wi else t)
             pop = "{\\fscx108\\fscy108\\t(0,80,\\fscx100\\fscy100)}" if wi == 0 else ""
             lines.append(

@@ -63,6 +63,7 @@ a{color:var(--accent)}
 <script>
 const TABS=["ready","approved","posted","queued","rendering","rejected","failed"];
 let tab="ready";
+const vlabel=g=>String((g&&g.model)||"gemini").startsWith("gemini")?"Gemini":"Video check";
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 function tabs(counts){document.getElementById("tabs").innerHTML=TABS.map(t=>`<button class="${t===tab?"on":""}" onclick="setTab('${t}')">${t} ${counts[t]||0}</button>`).join("")}
 function setTab(t){tab=t;load()}
@@ -86,17 +87,19 @@ async function load(){
         <div class="row"><b>#${c.id}</b><span class="pill">${esc(c.channel)}</span>
           <span class="pill">${esc(c.campaign_id||"no campaign")}</span>
           <span class="pill ${esc(c.spoiler_risk)}">spoiler: ${esc(c.spoiler_risk)}</span>
-          <span class="pill">quality ${c.quality}/10${n.gemini?` (Claude ${n.claude_quality} · Gemini ${n.gemini.quality})`:""}</span><span class="pill">score ${Number(c.score).toFixed(1)}</span>
+          <span class="pill">quality ${c.quality}/10${n.gemini?` (Claude ${n.claude_quality} · ${vlabel(n.gemini)} ${n.gemini.quality})`:""}</span><span class="pill">score ${Number(c.score).toFixed(1)}</span>
           ${n.unsafe?'<span class="pill high">UNSAFE</span>':""}
+          ${n.gemini&&n.gemini.age_risk&&n.gemini.age_risk!=="none"?`<span class="pill ${esc(n.gemini.age_risk)}" title="${esc(n.gemini.age_reason||"")}">18+ risk: ${esc(n.gemini.age_risk)}</span>`:""}
+          ${n.gemini&&n.gemini.is_gta6===false?'<span class="pill high">NOT GTA 6?</span>':""}
           ${c.decided_by?`<span class="pill ${c.decided_by==="auto"?"auto":""}">${c.decided_by==="auto"?"AI":"you"}: ${esc(c.status)}</span>`:""}
           ${c.expected_views?`<span class="pill">~${Number(c.expected_views).toLocaleString()} views expected</span>`:""}</div>
         ${c.decision_note?`<div class="decision">${esc(c.decision_note)}</div>`:""}
         ${c.source_note?`<div class="note">🎬 ${esc(c.source_note)}</div>`:""}
         ${n.tiebreak?`<div class="note">⚖️ ${esc(n.tiebreak)}</div>`:""}
-        ${n.hook_swapped?`<div class="note">✏️ Hook rewritten by Gemini after watching (was: “${esc(n.hook_swapped.from)}”)</div>`:""}
+        ${n.hook_swapped?`<div class="note">✏️ Hook rewritten by ${vlabel(n.gemini)} after looking at the video (was: “${esc(n.hook_swapped.from)}”)</div>`:""}
         ${n.why?`<div class="note">${esc(n.why)}</div>`:""}
-        ${n.gemini?`<div class="note"><b>Gemini watched it:</b> ${esc(n.gemini.what_happens)}${n.gemini.cutscene?" <b>(cutscene)</b>":""}${n.gemini.better_hook?`<br><b>Gemini hook idea:</b> ${esc(n.gemini.better_hook)}`:""}</div>`:""}
-        ${n.gemini_error?`<div class="note">Gemini review failed: ${esc(n.gemini_error)}</div>`:""}
+        ${n.gemini?`<div class="note"><b>${vlabel(n.gemini)} saw:</b> ${esc(n.gemini.what_happens)}${n.gemini.cutscene?" <b>(cutscene)</b>":""}${n.gemini.better_hook?`<br><b>${vlabel(n.gemini)} hook idea:</b> ${esc(n.gemini.better_hook)}`:""}</div>`:""}
+        ${n.gemini_error?`<div class="note">Video check failed: ${esc(n.gemini_error)}</div>`:""}
         ${c.error?`<div class="note" style="color:var(--bad)">${esc(c.error)}</div>`:""}
         <label>Hook (burned into video)</label><input id="h${c.id}" value="${esc(c.hook)}">
         <label>Title</label><input id="t${c.id}" value="${esc(c.title)}">

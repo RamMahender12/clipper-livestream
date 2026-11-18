@@ -44,24 +44,35 @@ SCHEMA = {
         "unsafe": {"type": "boolean"},
         "hook_matches": {"type": "boolean"},
         "better_hook": {"type": "string"},
+        "age_restriction_risk": {"type": "string", "enum": ["none", "low", "high"]},
+        "age_restriction_reason": {"type": "string"},
+        "is_gta6_gameplay": {"type": "boolean"},
+        "streamer_featured": {"type": "boolean"},
         "reason": {"type": "string"},
     },
     "required": ["what_happens", "visual_quality", "spoiler_risk", "is_cutscene", "unsafe",
-                 "hook_matches", "better_hook", "reason"],
+                 "hook_matches", "better_hook", "age_restriction_risk", "age_restriction_reason",
+                 "is_gta6_gameplay", "streamer_featured", "reason"],
 }
 
-PROMPT = """You are reviewing a vertical short (about 30 seconds) cut from a live Twitch stream of the video game GTA 6 during its launch week. It will be posted to a clip page on YouTube Shorts and Instagram Reels. Watch the whole clip, picture and sound, and answer:
-
-- what_happens: 1-2 sentences describing what is visible and audible.
+FIELDS = """- what_happens: 1-2 sentences describing what is visible and audible.
 - visual_quality: 1-10, how likely a stranger scrolling past stops and watches to the end. Reward clear action, chaos, funny or surprising moments, a payoff, and readable visuals. Score low for menus, loading screens, walking around with nothing happening, or talking over nothing.
 - spoiler_risk: "high" if it shows a cutscene, a story mission's outcome, a character death or betrayal, the ending, or a plot reveal; "low" for early story context; "none" for free-roam gameplay, chaos and reactions.
 - is_cutscene: true if the clip is mostly a non-interactive cinematic (letterbox bars, no game HUD, cinematic camera).
 - unsafe: true for slurs, harassment of a real person, sexual content, or anything against YouTube or Instagram community guidelines.
 - hook_matches: whether the on-screen hook text shown at the start matches what actually happens.
-- better_hook: if the current hook doesn't match or is weak, a replacement of at most 7 words, otherwise "". It is burned into the video, so it must be true to what you saw and spoiler-free, but it has to make a scrolling viewer stop: tease the payoff, the stakes or the absurd part ("He did NOT expect the tiger", "Cops showed up for a parking ticket"). Never a flat description like "Riding around listening to music".
-- reason: one sentence explaining your score.
+- better_hook: if the current hook doesn't match or is weak, a replacement of at most 7 words, otherwise "". It is burned into the video, so it must be true to what you saw and spoiler-free, but it has to make a scrolling viewer stop: tease the payoff, the stakes or the absurd part ("He did NOT expect the tiger", "Cops showed up for a parking ticket"). Never a flat description like "Riding around listening to music". No swearing, and no violent or crime words (kill, rob, jumped, beat up, shoot): frame it as the game fail it is ("His heist plan lasted 3 seconds").
+- age_restriction_risk: how likely YouTube is to age-restrict it (18+, hidden from most Shorts viewers). "high" if violence is the focus (a beating, someone being attacked or killed up close, blood, torture, cruelty to animals), it shows or jokes about sexual content or nudity, it features drug use, heavy or repeated swearing is audible in the first seconds, or the framing is a real-world crime (robbing, stealing from a kid) rather than a game fail. "low" for ordinary game action (car chases, crashes, shootouts at a distance, getting wasted by a bird) with mild language. "none" otherwise.
+- age_restriction_reason: a few words on what would trigger it, or "".
+- is_gta6_gameplay: true only if this is gameplay footage from GTA 6 (Grand Theft Auto VI, set in Leonida / Vice City). false for another game (GTA V, Far Cry, RDR2...), or if the clip is mostly a menu, loading screen, the desktop or just the streamer with no game.
+- streamer_featured: true if the streamer is clearly part of the moment (their facecam is visible or their voice reacts to it), false if it is only game footage or someone else.
+- reason: one sentence explaining your score."""
 
-Context: streamer {streamer}. On-screen hook: {hook!r}. Chat was spamming: {chat}. Transcript (auto-generated, may contain errors): {transcript!r}"""
+CONTEXT = """Context: streamer {streamer}. On-screen hook: {hook!r}. Chat was spamming: {chat}. Transcript (auto-generated, may contain errors): {transcript!r}"""
+
+PROMPT = ("You are reviewing a vertical short (about 30 seconds) cut from a live Twitch stream of the video game "
+          "GTA 6 during its launch week. It will be posted to a clip page on YouTube Shorts and Instagram Reels. "
+          "Watch the whole clip, picture and sound, and answer:\n\n" + FIELDS + "\n\n" + CONTEXT)
 
 
 class GeminiError(Exception):
@@ -72,6 +83,10 @@ def configured(cfg: dict) -> bool:
     g = cfg.get("gemini", {})
     if not g.get("enabled"):
         return False
+    if g.get("backend") == "claude":
+        from . import ai
+
+        return bool(cfg.get("ai", {}).get("enabled")) and ai.have_credentials()
     if g.get("backend", "vertex") == "vertex":
         from . import config as config_mod
 
@@ -301,6 +316,11 @@ def ask(cfg: dict, key: str, file: dict, prompt: str) -> tuple[dict, str]:
 
 def review(cfg: dict, video: Path, *, streamer: str, hook: str, transcript: str, chat_terms: list[str]) -> dict:
     """Ask Gemini about one rendered clip. Returns a normalised review dict; raises GeminiError."""
+    if cfg["gemini"].get("backend") == "claude":
+        from . import claude_vision
+
+        return claude_vision.review(cfg, video, streamer=streamer, hook=hook, transcript=transcript,
+                                    chat_terms=chat_terms)
     prompt = PROMPT.format(streamer=streamer, hook=hook, chat=", ".join(chat_terms) or "n/a",
                            transcript=transcript[:1500] or "(no speech)")
     if cfg["gemini"].get("backend", "vertex") == "vertex":
@@ -318,6 +338,11 @@ def review(cfg: dict, video: Path, *, streamer: str, hook: str, transcript: str,
             data, model = ask(cfg, key, f, prompt)
         finally:
             delete(key, f.get("name", ""))
+    return normalize(data, model)
+
+
+def normalize(data: dict, model: str) -> dict:
+    """One review shape for every backend."""
     risk = str(data.get("spoiler_risk", "")).lower()
     return {
         "quality": max(1, min(10, int(data.get("visual_quality") or 1))),
@@ -327,12 +352,83 @@ def review(cfg: dict, video: Path, *, streamer: str, hook: str, transcript: str,
         "unsafe": bool(data.get("unsafe")),
         "hook_matches": data.get("hook_matches") is not False,
         "better_hook": str(data.get("better_hook", ""))[:60],
+        "age_risk": age if (age := str(data.get("age_restriction_risk", "")).lower()) in RISK_RANK else "low",
+        "age_reason": str(data.get("age_restriction_reason", ""))[:160],
+        "is_gta6": data.get("is_gta6_gameplay") is not False,
+        "streamer_featured": data.get("streamer_featured") is not False,
         "reason": str(data.get("reason", ""))[:300],
         "model": model,
     }
 
 
 # ---------------------------------------------------------------- combining
+def label(gem: dict | None) -> str:
+    """How to name the video reviewer to people: Gemini, or Claude looking at frames."""
+    return "Gemini" if str((gem or {}).get("model", "gemini")).startswith("gemini") else "Video check"
+
+
+class Breaker:
+    """Stops calling the video reviewer when it starts failing, so a restricted or broken API isn't
+    hammered (Google restricted the project after heavy use), and says so once on Telegram.
+
+    - a policy/permission rejection (HTTP 401/403, "terms of use") pauses it for policy_pause_hours
+    - fail_limit failures in a row pause it for pause_minutes
+    - no more than max_per_hour reviews per hour
+    """
+
+    def __init__(self):
+        import threading
+
+        self.lock = threading.Lock()
+        self.reset()
+
+    def reset(self) -> None:
+        self.until, self.fails, self.calls, self.why = 0.0, 0, [], ""
+
+    def allow(self, cfg: dict) -> tuple[bool, str]:
+        g = cfg.get("gemini", {})
+        now = time.time()
+        with self.lock:
+            if now < self.until:
+                return False, f"paused until {time.strftime('%H:%M UTC', time.gmtime(self.until))}: {self.why}"
+            self.calls = [t for t in self.calls if t > now - 3600]
+            cap = int(g.get("max_per_hour", 60))
+            if len(self.calls) >= cap:
+                return False, f"hourly limit of {cap} reviews reached"
+            self.calls.append(now)
+            return True, ""
+
+    def ok(self) -> None:
+        with self.lock:
+            self.fails = 0
+
+    def fail(self, cfg: dict, exc: Exception) -> None:
+        g = cfg.get("gemini", {})
+        text = str(exc)
+        policy = any(k in text for k in ("HTTP 401", "HTTP 403", "terms of use", "api-401", "api-403", "refusal"))
+        with self.lock:
+            self.fails += 1
+            if policy:
+                hours = float(g.get("policy_pause_hours", 6))
+                self.until, self.why = time.time() + hours * 3600, text[:160]
+            elif self.fails >= int(g.get("fail_limit", 3)):
+                self.until, self.why = time.time() + float(g.get("pause_minutes", 30)) * 60, text[:160]
+            else:
+                return
+            until, why = self.until, self.why
+        log.error("video check paused until %s: %s", time.strftime("%H:%M UTC", time.gmtime(until)), why)
+        try:
+            from . import notify
+
+            notify.send(f"⚠️ Video check paused until {time.strftime('%H:%M UTC', time.gmtime(until))}: {why}\n"
+                        "Clips wait for you (no auto-approve without it).")
+        except Exception:
+            pass
+
+
+BREAKER = Breaker()
+
+
 def combine(claude_quality: int, claude_spoiler: str, claude_unsafe: bool, gem: dict | None,
             weight: float = 0.6, disagree_points: int = 3) -> dict:
     """Final verdict from both models. gem=None means Gemini wasn't available."""
@@ -350,7 +446,8 @@ def combine(claude_quality: int, claude_spoiler: str, claude_unsafe: bool, gem: 
             "disagree": disagree}
 
 
-def tiebreak(final: dict, claude_quality: int, gemini_quality: int, strength: str | None, why: str = "") -> dict:
+def tiebreak(final: dict, claude_quality: int, gemini_quality: int, strength: str | None, why: str = "",
+             name: str = "Gemini") -> dict:
     """Settle a Claude/Gemini quality split with real audience evidence (Twitch viewer clip views).
 
     strong views side with the higher score, weak ones with the lower; anything else stays a
@@ -359,7 +456,7 @@ def tiebreak(final: dict, claude_quality: int, gemini_quality: int, strength: st
     if not final.get("disagree") or strength not in ("strong", "weak"):
         return final
     pick_high = strength == "strong"
-    side = "Gemini" if (gemini_quality >= claude_quality) == pick_high else "Claude"
+    side = name if (gemini_quality >= claude_quality) == pick_high else "Claude"
     quality = max(claude_quality, gemini_quality) if pick_high else min(claude_quality, gemini_quality)
     return {**final, "quality": quality, "disagree": False,
             "tiebreak": f"Twitch views broke the tie ({why}): went with {side}'s {quality}/10"}

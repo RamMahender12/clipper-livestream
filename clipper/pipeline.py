@@ -119,6 +119,7 @@ def render_final(db: DB, cfg: dict, clip_id: int, ch: dict, src: Path, start: fl
             highlight=capcfg["highlight_color"], per_chunk=capcfg["words_per_chunk"],
             hook=hook, hook_seconds=capcfg["hook_seconds"],
             credit=credit if ch.get("credit_overlay", True) else "", duration=dur,
+            censor=capcfg.get("censor_profanity", True),
         )
         ass_path = out_dir / "captions.ass"
         ass_path.write_text(ass, encoding="utf-8")
@@ -129,6 +130,7 @@ def render_final(db: DB, cfg: dict, clip_id: int, ch: dict, src: Path, start: fl
         width=ccfg["width"], height=ccfg["height"], fps=ccfg["fps"],
         encoder=ccfg["encoder"], facecam=ch.get("facecam"), ass_path=ass_path,
         zoom=float(ch.get("zoom", ccfg.get("zoom", 1.0))),
+        mute=captions.profane_spans(words) if capcfg.get("mute_profanity", True) else None,
     )
     try:
         render.thumbnail(final, out_dir / "thumb.jpg", at=min(1.5, dur / 2))
@@ -195,6 +197,18 @@ def gemini_review(db: DB, cfg: dict, clip_id: int) -> bool:
         notes = json.loads(row.get("ai_notes") or "{}")
     except json.JSONDecodeError:
         notes = {}
+    # never send a reviewer what Claude already flagged (slurs, sexual content): it's held for you anyway,
+    # and repeatedly uploading that kind of footage is how a provider account gets flagged
+    if notes.get("claude_unsafe", notes.get("unsafe")):
+        notes["gemini_skipped"] = "Claude flagged it unsafe; not sent for a video check"
+        db.update("clips", clip_id, ai_notes=json.dumps(notes))
+        return False
+    allowed, why = gemini.BREAKER.allow(cfg)
+    if not allowed:
+        log.info("clip %s: video check skipped (%s)", clip_id, why)
+        notes["gemini_error"] = f"video check {why}"
+        db.update("clips", clip_id, ai_notes=json.dumps(notes))
+        return False
     ch = config_mod.channel(cfg, row["channel"]) or {"login": row["channel"]}
     spike = db.one("SELECT top_terms FROM spikes WHERE id = ?", (row["spike_id"],)) if row.get("spike_id") else None
     try:
@@ -203,11 +217,13 @@ def gemini_review(db: DB, cfg: dict, clip_id: int) -> bool:
                             hook=(row.get("hook") or "").strip(), transcript=row.get("transcript") or "",
                             chat_terms=(spike["top_terms"].split(",") if spike and spike["top_terms"]
                                         else [row["source_note"]] if row.get("source_note") else []))
-    except Exception as exc:  # network, quota, parse: keep Claude's verdict
-        log.warning("clip %s: gemini review failed: %s", clip_id, exc)
+    except Exception as exc:  # network, quota, policy, parse: keep Claude's verdict
+        log.warning("clip %s: video check failed: %s", clip_id, exc)
+        gemini.BREAKER.fail(cfg, exc)
         notes["gemini_error"] = str(exc)[:200]
         db.update("clips", clip_id, ai_notes=json.dumps(notes))
         return False
+    gemini.BREAKER.ok()
     claude_q = int(notes.get("claude_quality", row.get("quality") or 0))
     claude_spoiler = notes.get("claude_spoiler", row.get("spoiler_risk") or "unknown")
     claude_unsafe = bool(notes.get("claude_unsafe", notes.get("unsafe", False)))
@@ -218,10 +234,11 @@ def gemini_review(db: DB, cfg: dict, clip_id: int) -> bool:
         from . import twitch_clips
 
         final = gemini.tiebreak(final, claude_q, gem["quality"], twitch_clips.evidence(cfg, row),
-                                twitch_clips.evidence_text(row))
+                                twitch_clips.evidence_text(row), name=gemini.label(gem))
     notes.update({"claude_quality": claude_q, "claude_spoiler": claude_spoiler, "claude_unsafe": claude_unsafe,
                   "gemini": gem, "disagree": final["disagree"], "unsafe": final["unsafe"]})
     notes.pop("gemini_error", None)
+    notes.pop("gemini_skipped", None)
     notes.pop("tiebreak", None)
     if final.get("tiebreak"):
         notes["tiebreak"] = final["tiebreak"]

@@ -16,9 +16,11 @@ def have_credentials() -> bool:
 def call_json(
     cfg: dict,
     system: str,
-    user: str,
+    user: str | list,
     schema: dict,
     effort: str | None = None,
+    model: str | None = None,
+    max_tokens: int = 16000,
 ) -> tuple[dict | None, str]:
     """Return (data, model) on success, or (None, reason) where reason is one of
     no-credentials, no-sdk, auth, rate-limit, api-<status>, connection, refusal, bad-json."""
@@ -33,8 +35,8 @@ def call_json(
     client = anthropic.Anthropic()
     try:
         response = client.beta.messages.create(
-            model=ai.get("model", "claude-opus-5-5"),
-            max_tokens=16000,
+            model=model or ai.get("model", "claude-opus-5-5"),
+            max_tokens=max_tokens,
             betas=["server-side-fallback-2026-07-01"],
             fallbacks="default",
             output_config={
