@@ -4,7 +4,7 @@ at login, restarts after a crash, and keeps the Mac awake while it runs.
   clipper service install    write the agent and start it
   clipper service status     is it running, pid, last exit, log path
   clipper service restart    pick up config.toml / secrets changes
-  clipper service stop       stop it (stays stopped until start or next install)
+  clipper service stop       stop it; stays stopped across logins until start/install
   clipper service start
   clipper service uninstall  stop it and remove the agent
 """
@@ -153,6 +153,7 @@ def install(cfg: dict) -> str:
     ensure_env_template()
     if is_loaded():
         _launchctl("bootout", f"{_domain()}/{LABEL}")
+    _launchctl("enable", f"{_domain()}/{LABEL}")
     res = _launchctl("bootstrap", _domain(), str(path))
     if res.returncode != 0:
         raise SystemExit(f"launchctl bootstrap failed: {res.stderr.strip() or res.stdout.strip()}")
@@ -162,6 +163,7 @@ def install(cfg: dict) -> str:
 def start() -> None:
     if not plist_path().exists():
         raise SystemExit("Not installed. Run: clipper service install")
+    _launchctl("enable", f"{_domain()}/{LABEL}")
     if not is_loaded():
         res = _launchctl("bootstrap", _domain(), str(plist_path()))
         if res.returncode != 0:
@@ -171,6 +173,8 @@ def start() -> None:
 
 
 def stop() -> None:
+    # disable first: otherwise launchd loads the agent again at the next login
+    _launchctl("disable", f"{_domain()}/{LABEL}")
     if is_loaded():
         _launchctl("bootout", f"{_domain()}/{LABEL}")
 
@@ -185,11 +189,15 @@ def restart() -> None:
 def uninstall() -> None:
     stop()
     plist_path().unlink(missing_ok=True)
+    _launchctl("enable", f"{_domain()}/{LABEL}")  # don't leave a stale "disabled" mark behind
 
 
 def status(cfg: dict) -> dict:
     info = {"installed": plist_path().exists(), "loaded": False, "state": "not loaded",
             "pid": None, "last_exit": None, "log": str(log_path(cfg))}
+    if sys.platform != "darwin" or not shutil.which("launchctl"):
+        info["state"] = "n/a (launchd is macOS-only; in the cloud Docker restarts it)"
+        return info
     res = _launchctl("print", f"{_domain()}/{LABEL}")
     if res.returncode != 0:
         return info

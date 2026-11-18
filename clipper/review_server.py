@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import threading
 import time
@@ -315,7 +316,7 @@ def make_handler(db: DB, cfg: dict, watchers: list):
 
 def serve(db: DB, cfg: dict, watchers: list, stop: threading.Event) -> ThreadingHTTPServer:
     host, port = cfg["review"]["host"], int(cfg["review"]["port"])
-    if host not in ("127.0.0.1", "localhost", "::1"):
+    if host not in ("127.0.0.1", "localhost", "::1") and not os.environ.get("CLIPPER_BEHIND_PROXY"):
         log.warning("review UI bound to %s: anyone on that network can approve posts", host)
     httpd = ThreadingHTTPServer((host, port), make_handler(db, cfg, watchers))
     t = threading.Thread(target=httpd.serve_forever, daemon=True, name="review")

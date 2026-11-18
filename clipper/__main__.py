@@ -106,8 +106,9 @@ def cmd_doctor(args, cfg) -> int:
     print(f"  [{'ok' if env_path.exists() else '--'}] secrets file {service.ENV_FILE}"
           f"{'' if env_path.exists() else ' (created by `clipper service install`)'}")
     st = service.status(cfg)
-    print(f"  [{'ok' if st['state'] == 'running' else '--'}] background service: "
-          f"{'installed, ' + st['state'] if st['installed'] else 'not installed (clipper service install)'}")
+    if sys.platform == "darwin":
+        print(f"  [{'ok' if st['state'] in ('running', 'active') else '--'}] background service: "
+              f"{'installed, ' + st['state'] if st['installed'] else 'not installed (clipper service install)'}")
     acfg = cfg["auto_approve"]
     if acfg.get("enabled"):
         print(f"  [{'ok' if have_key else '!!'}] auto-approve ON"
@@ -288,6 +289,11 @@ def cmd_service(args, cfg) -> int:
     elif action == "uninstall":
         service.uninstall()
         print("Stopped and removed the background service.")
+    if action in ("stop", "uninstall"):
+        for _ in range(20):  # launchd unloads asynchronously
+            if not service.is_loaded():
+                break
+            time.sleep(0.25)
     st = service.status(cfg)
     print(f"service: {'installed' if st['installed'] else 'not installed'}, {st['state']}"
           f"{', pid ' + st['pid'] if st['pid'] else ''}"

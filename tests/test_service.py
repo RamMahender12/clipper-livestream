@@ -38,6 +38,20 @@ not a line
         self.assertEqual(service.load_env_file(Path("/nonexistent/clipper.env")), [])
 
 
+class CloudOverrideTests(unittest.TestCase):
+    def test_env_overrides_apply_to_loaded_config(self):
+        from clipper import config as config_mod
+
+        path = Path(tempfile.mkdtemp()) / "config.toml"
+        path.write_text('[review]\nhost = "127.0.0.1"\n')
+        env = {"CLIPPER_REVIEW_HOST": "0.0.0.0", "CLIPPER_CAPTION_FONT": "Anton"}
+        with mock.patch.dict(os.environ, env):
+            cfg = config_mod.load(path)
+        self.assertEqual(cfg["review"]["host"], "0.0.0.0")
+        self.assertEqual(cfg["captions"]["font"], "Anton")
+        self.assertEqual(config_mod.load(path)["review"]["host"], "127.0.0.1")
+
+
 class PlistTests(unittest.TestCase):
     def test_plist_shape(self):
         p = service.build_plist(Path("/proj"), "/proj/.venv/bin/python", Path("/proj/data/logs/service.log"))

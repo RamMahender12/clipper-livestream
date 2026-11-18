@@ -1,0 +1,9 @@
+.git
+.venv
+data
+models
+secrets
+config.toml
+**/__pycache__
+*.egg-info
+tests

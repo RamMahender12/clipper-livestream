@@ -138,7 +138,26 @@ def load(path: str | Path | None = None) -> dict:
         user = tomllib.load(fh)
     cfg = _merge(DEFAULTS, user)
     cfg["_path"] = str(path)
+    _apply_env_overrides(cfg)
     return cfg
+
+
+# Settings that must differ inside the cloud container (set in docker-compose),
+# so one config.toml works on the Mac and on the server.
+ENV_OVERRIDES = {
+    "CLIPPER_REVIEW_HOST": ("review", "host"),
+    "CLIPPER_CAPTION_FONT": ("captions", "font"),
+    "CLIPPER_ENCODER": ("clip", "encoder"),
+}
+
+
+def _apply_env_overrides(cfg: dict) -> None:
+    import os
+
+    for env, (section, key) in ENV_OVERRIDES.items():
+        value = os.environ.get(env)
+        if value:
+            cfg[section][key] = value
 
 
 def data_dir(cfg: dict) -> Path:

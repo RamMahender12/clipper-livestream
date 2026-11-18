@@ -50,6 +50,34 @@ ANTHROPIC_API_KEY=sk-ant-...
 
 Then open http://127.0.0.1:8765. Clips appear under **ready** about a minute after a spike. Edit the hook (Save + re-render burns the new one in), fix the caption, then **Approve**. The scheduler posts approved clips to each platform in `[posting].platforms`, one at a time, respecting the daily caps and minimum gap.
 
+## Run it in the cloud
+
+The same code runs on any Ubuntu server in Docker, behind Caddy with automatic HTTPS and a dashboard password. Current setup: AWS `ap-south-1` (Mumbai), `c7g.xlarge` (4 ARM vCPU, 8 GB), 100 GB disk, fixed IP `16.4.174.31`, dashboard at **https://gta6clipper.dawnlights.in** (user `admin`, password in `secrets/dashboard.txt`).
+
+Deploy or update (also after editing `config.toml` or anything in `secrets/`):
+
+```bash
+./deploy/deploy.sh ubuntu@16.4.174.31 -i ~/.ssh/id_ed25519_gta6clipper
+```
+
+It installs Docker on first run, copies the code, `config.toml` and `secrets/` (API keys, OAuth tokens; the plaintext dashboard password stays on your Mac), builds the image on the server and restarts it. The containers restart themselves after crashes and reboots. DNS: a GoDaddy **A** record `gta6clipper` → `16.4.174.31`.
+
+Useful on the server (`ssh -i ~/.ssh/id_ed25519_gta6clipper ubuntu@16.4.174.31`):
+
+```bash
+cd /opt/gta6clipper/deploy && sudo docker compose logs -f clipper
+```
+
+```bash
+cd /opt/gta6clipper/deploy && sudo docker compose exec clipper python -m clipper stats
+```
+
+Notes:
+- SSH is only allowed from the IP you had at setup. If your home IP changes, add the new one to the `gta6clipper-sg` security group (AWS console → EC2 → Security Groups).
+- YouTube/TikTok sign-in (`clipper auth youtube`) opens a browser, so run it on the Mac, then redeploy to copy the token file to the server.
+- Only run one copy at a time: two copies record and post the same streams. With the cloud server live, stop the Mac service (`clipper service stop`).
+- Costs about $85/month on demand (server, disk, IP), paid from AWS credits first.
+
 ## Run it unattended (macOS)
 
 ```bash
