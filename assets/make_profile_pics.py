@@ -21,7 +21,10 @@ PAGES = {
     # name, gradient top -> middle -> bottom, sun colours, accent
     "lacy": ("LACY", [(32, 6, 58), (196, 24, 120), (255, 140, 50)], [(255, 214, 90), (255, 70, 140)], (255, 226, 120)),
     "clix": ("CLIX", [(10, 10, 48), (60, 40, 200), (0, 200, 230)], [(120, 255, 240), (90, 110, 255)], (140, 255, 235)),
+    "yourragegaming": ("YOURRAGE", [(30, 4, 10), (170, 20, 30), (255, 120, 30)], [(255, 230, 90), (255, 60, 40)],
+                       (255, 210, 90)),
 }
+MAX_NAME_WIDTH = 840  # keeps long names inside the circle crop
 
 
 def lerp(a, b, t):
@@ -86,15 +89,21 @@ def make(key):
     sun(img, sun_colors)
     grid(img)
     d = ImageDraw.Draw(img)
-    big = ImageFont.truetype(str(FONTS / "Impact.ttf"), 300)
+    size = 300
+    while size > 120:  # shrink long names until they fit
+        big = ImageFont.truetype(str(FONTS / "Impact.ttf"), size)
+        if sum(d.textlength(ch, font=big) for ch in name) + 12 * (len(name) - 1) <= MAX_NAME_WIDTH:
+            break
+        size -= 10
+    y = 300 + (300 - size) * 0.6  # keep a smaller name visually centred on the sun
     small = ImageFont.truetype(str(FONTS / "Arial Black.ttf"), 78)
     # drop shadow for the name
     shadow = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
     sd = ImageDraw.Draw(shadow)
-    text_center(sd, 300 + 14, name, big, (0, 0, 0, 170), (0, (0, 0, 0)), spacing=12)
+    text_center(sd, y + 14, name, big, (0, 0, 0, 170), (0, (0, 0, 0)), spacing=12)
     shadow = shadow.filter(ImageFilter.GaussianBlur(10))
     img.alpha_composite(shadow)
-    text_center(d, 300, name, big, (255, 255, 255), (8, (20, 6, 40)), spacing=12)
+    text_center(d, y, name, big, (255, 255, 255), (8, (20, 6, 40)), spacing=12)
     # "GTA 6 CLIPS" pill
     label = "GTA 6 CLIPS"
     lw = sum(d.textlength(ch, font=small) for ch in label) + 8 * (len(label) - 1)
@@ -114,5 +123,7 @@ def make(key):
 
 
 if __name__ == "__main__":
-    for key in PAGES:
+    import sys
+
+    for key in sys.argv[1:] or PAGES:
         print(make(key))

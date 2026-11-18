@@ -490,8 +490,10 @@ def cmd_auth(args, cfg) -> int:
         if args.channel:
             ch = config_mod.channel(cfg, args.channel)
             if not ch:
-                print(f"No channel '{args.channel}' in config.toml")
-                return 1
+                # a streamer you're still setting up (not switched on yet): the token goes where the
+                # channel will look for it once it's in config.toml
+                ch = {"login": args.channel.lower()}
+                print(f"'{args.channel}' isn't switched on in config.toml yet; saving its token for later.")
             token = youtube_token_path(cfg, ch)
             acfg = dict(cfg)
             acfg["youtube"] = {**cfg["youtube"], "token_file": token}
