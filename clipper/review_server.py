@@ -91,12 +91,13 @@ async function load(){
           ${n.unsafe?'<span class="pill high">UNSAFE</span>':""}
           ${n.gemini&&n.gemini.age_risk&&n.gemini.age_risk!=="none"?`<span class="pill ${esc(n.gemini.age_risk)}" title="${esc(n.gemini.age_reason||"")}">18+ risk: ${esc(n.gemini.age_risk)}</span>`:""}
           ${n.gemini&&n.gemini.is_gta6===false?'<span class="pill high">NOT GTA 6?</span>':""}
+          ${(n.music_heavy||(n.gemini&&["possible","likely"].includes(n.gemini.music)))?`<span class="pill ${n.music_heavy||n.gemini.music==="likely"?"high":"low"}" title="${esc((n.gemini&&n.gemini.music_reason)||"")}">🎵 music: ${esc(n.music_heavy?"heavy":n.gemini.music)}</span>`:""}
           ${c.decided_by?`<span class="pill ${c.decided_by==="auto"?"auto":""}">${c.decided_by==="auto"?"AI":"you"}: ${esc(c.status)}</span>`:""}
           ${c.expected_views?`<span class="pill">~${Number(c.expected_views).toLocaleString()} views expected</span>`:""}</div>
         ${c.decision_note?`<div class="decision">${esc(c.decision_note)}</div>`:""}
         ${c.source_note?`<div class="note">🎬 ${esc(c.source_note)}</div>`:""}
         ${n.tiebreak?`<div class="note">⚖️ ${esc(n.tiebreak)}</div>`:""}
-        ${n.violence_cut?`<div class="note">✂️ Violence cut out: kept ${Number(n.violence_cut.kept[0]).toFixed(1)}–${Number(n.violence_cut.kept[1]).toFixed(1)}s of ${Number(n.violence_cut.was).toFixed(1)}s (${esc(n.violence_cut.removed.map(v=>v[2]).join("; "))})</div>`:""}
+        ${n.violence_cut?`<div class="note">✂️ Cut out: kept ${Number(n.violence_cut.kept[0]).toFixed(1)}–${Number(n.violence_cut.kept[1]).toFixed(1)}s of ${Number(n.violence_cut.was).toFixed(1)}s (${esc(n.violence_cut.removed.map(v=>v[2]).join("; "))})</div>`:""}
         ${n.hook_swapped?`<div class="note">✏️ Hook rewritten by ${vlabel(n.gemini)} after looking at the video (was: “${esc(n.hook_swapped.from)}”)</div>`:""}
         ${n.why?`<div class="note">${esc(n.why)}</div>`:""}
         ${n.gemini?`<div class="note"><b>${vlabel(n.gemini)} saw:</b> ${esc(n.gemini.what_happens)}${n.gemini.cutscene?" <b>(cutscene)</b>":""}${n.gemini.better_hook?`<br><b>${vlabel(n.gemini)} hook idea:</b> ${esc(n.gemini.better_hook)}`:""}</div>`:""}

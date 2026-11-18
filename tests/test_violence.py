@@ -79,6 +79,63 @@ class CutTests(unittest.TestCase):
         self.assertNotIn("violence_cut", json.loads(row["ai_notes"]))
 
 
+class MusicTests(unittest.TestCase):
+    def test_markers_never_reach_captions_and_music_is_timed(self):
+        from clipper import captions
+        W = captions.Word
+        words = [W(0.0, 0.3, "I"), W(0.3, 0.6, "need"), W(25.86, 26.5, "[MUSIC"), W(26.5, 27.56, "PLAYING]"),
+                 W(28.0, 28.4, "(crickets"), W(28.4, 28.9, "chirping)"), W(29.0, 29.3, "♪"), W(29.5, 29.8, "bro")]
+        speech, music = captions.split_markers(words)
+        self.assertEqual([w.text for w in speech], ["I", "need", "bro"])
+        self.assertEqual(music, [(25.86, 29.3)])  # merged across the 1.5 s gap, crickets aren't music
+        unclosed = [W(0, 1, "(this"), *[W(i, i + 0.5, f"w{i}") for i in range(1, 9)]]
+        self.assertEqual(len(captions.split_markers(unclosed)[0]), 8)  # a stray "(" doesn't eat the speech
+        data = {"transcription": [{"offsets": {"from": 0, "to": 400}, "text": " (UPBEAT"},
+                                  {"offsets": {"from": 400, "to": 900}, "text": " MUSIC"},
+                                  {"offsets": {"from": 900, "to": 950}, "text": ")"},
+                                  {"offsets": {"from": 1000, "to": 1300}, "text": " go"}]}
+        self.assertEqual([w.text for w in captions.words_from_whisper(data)], ["go"])
+        self.assertEqual(captions.split_markers(captions._raw_words(data))[1], [(0.0, 0.95)])
+        ass = captions.build_ass(words, duration=30)
+        self.assertNotIn("[MUSIC", ass)
+        self.assertNotIn("CRICKETS", ass)
+        self.assertIn("BRO", ass)
+
+
+class MusicCutTests(CutTests):
+    def test_short_music_is_cut_with_no_violence(self):
+        self.db.update("clips", self.cid, ai_notes=json.dumps({"gemini": {"quality": 6, "violence": []}}),
+                       music_json=json.dumps([[0.0, 4.0]]))
+        with mock.patch.object(pipeline, "render_final", side_effect=self.render), \
+                mock.patch.object(pipeline, "gemini_review", side_effect=self.review):
+            self.assertEqual(pipeline.cut_violence(self.db, self.cfg, self.cid), "cut")
+        row = dict(self.db.one("SELECT * FROM clips WHERE id = ?", (self.cid,)))
+        self.assertEqual((row["start_s"], row["duration_s"]), (105.5, 13.5))
+        notes = json.loads(row["ai_notes"])
+        self.assertEqual(notes["violence_cut"]["removed"], [[0.0, 4.0, "radio music"]])
+        self.assertEqual(json.loads(row["music_json"]), [])
+
+    def test_music_through_most_of_it_is_held_not_cut(self):
+        self.db.update("clips", self.cid, ai_notes=json.dumps({"gemini": {"quality": 6, "violence": []}}),
+                       music_json=json.dumps([[0.0, 17.0]]))
+        with mock.patch.object(pipeline, "render_final") as render:
+            self.assertEqual(pipeline.cut_violence(self.db, self.cfg, self.cid), "")
+            render.assert_not_called()
+        notes = json.loads(self.db.one("SELECT ai_notes FROM clips WHERE id = ?", (self.cid,))["ai_notes"])
+        self.assertTrue(notes["music_heavy"])
+        from clipper import guardrails
+        cfg = config_mod._merge(self.cfg, {"channels": [{"login": "clix", "permission": "own"}]})
+        gem = {"quality": 7, "hook_matches": True, "age_risk": "low", "is_gta6": True, "streamer_featured": True,
+               "violence": [], "music": "none"}
+        ok, why = guardrails.auto_gate(cfg, cfg["channels"][0], {"final_path": "/x", "spoiler_risk": "none"},
+                                       {"source": "claude", "gemini": gem, "music_heavy": True})
+        self.assertFalse(ok)
+        self.assertIn("licensed music", why)
+        ok, why = guardrails.auto_gate(cfg, cfg["channels"][0], {"final_path": "/x", "spoiler_risk": "none"},
+                                       {"source": "claude", "gemini": {**gem, "music": "likely", "music_reason": "radio HUD"}})
+        self.assertIn("radio HUD", why)
+
+
 class WeakMomentTests(unittest.TestCase):
     def test_weak_chat_moments_are_not_rendered_but_viewer_clips_are(self):
         from clipper import metadata

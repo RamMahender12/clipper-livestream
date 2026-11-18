@@ -14,6 +14,7 @@ from pathlib import Path
 from . import tools
 
 _NOISE = re.compile(r"^\s*[\[\(].*[\]\)]\s*$")  # [Music], (laughs)
+_MUSIC = re.compile(r"music|singing|song|humming|melody|♪", re.I)
 
 
 @dataclass
@@ -23,8 +24,7 @@ class Word:
     text: str
 
 
-def transcribe(media: Path, model: Path, start: float = 0.0, duration: float | None = None) -> list[Word]:
-    """Transcribe [start, start+duration] of `media`; word times are relative to `start`."""
+def _whisper_json(media: Path, model: Path, start: float = 0.0, duration: float | None = None) -> dict:
     with tempfile.TemporaryDirectory() as tmp:
         wav = Path(tmp) / "a.wav"
         cmd = [tools.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", "-ss", f"{start:.3f}"]
@@ -42,7 +42,18 @@ def transcribe(media: Path, model: Path, start: float = 0.0, duration: float | N
             wcmd += ["-dtw", dtw]
         tools.run(wcmd, timeout=600)
         data = json.loads((base.with_suffix(".json")).read_text(encoding="utf-8", errors="replace"))
-    return words_from_whisper(data)
+    return data
+
+
+def transcribe(media: Path, model: Path, start: float = 0.0, duration: float | None = None) -> list[Word]:
+    """Transcribe [start, start+duration] of `media`; word times are relative to `start`."""
+    return words_from_whisper(_whisper_json(media, model, start, duration))
+
+
+def transcribe_full(media: Path, model: Path, start: float = 0.0,
+                    duration: float | None = None) -> tuple[list[Word], list[tuple[float, float]]]:
+    """(speech words, music spans): whisper marks stretches of music like [MUSIC PLAYING]."""
+    return split_markers(_raw_words(_whisper_json(media, model, start, duration)))
 
 
 def _dtw_preset(model: Path) -> str | None:
@@ -50,20 +61,67 @@ def _dtw_preset(model: Path) -> str | None:
     return f"{m.group(1)}{m.group(2) or ''}" if m else None
 
 
-def words_from_whisper(data: dict) -> list[Word]:
+def _raw_words(data: dict) -> list[Word]:
+    """Every token whisper produced, sound markers included; stray punctuation joins the word before."""
     words: list[Word] = []
     for seg in data.get("transcription", []):
         text = (seg.get("text") or "").strip()
-        if not text or _NOISE.match(text):
+        if not text:
             continue
         off = seg.get("offsets") or {}
         start, end = off.get("from", 0) / 1000.0, off.get("to", 0) / 1000.0
-        if words and not text[0].isalnum() and len(text) <= 2:
+        if words and not text[0].isalnum() and text[0] not in "[(♪" and len(text) <= 2:
             words[-1].text += text  # stray punctuation token
             words[-1].end = max(words[-1].end, end)
             continue
         words.append(Word(start, max(end, start + 0.05), text))
     return words
+
+
+def split_markers(words: list[Word], merge_gap: float = 1.5) -> tuple[list[Word], list[tuple[float, float]]]:
+    """Separate whisper's sound markers ([MUSIC PLAYING], (crickets chirping), ♪) from speech.
+
+    With word-level timing one marker can arrive as several tokens ("[MUSIC", "PLAYING]"), which
+    used to end up burned into the captions. Returns (speech words, merged music spans)."""
+    speech: list[Word] = []
+    music: list[tuple[float, float]] = []
+    group: list[Word] = []
+    for w in words:
+        t = w.text.strip()
+        if not group and t[:1] in "[(":
+            group = [w]
+        elif group:
+            group.append(w)
+        else:
+            if "♪" in t:
+                music.append((w.start, w.end))
+                t = t.replace("♪", "").strip()
+                if not t:
+                    continue
+                w = Word(w.start, w.end, t)
+            speech.append(w)
+            continue
+        text = " ".join(g.text for g in group)
+        if text.rstrip(".,!?;:")[-1:] in "])":
+            if _MUSIC.search(text):
+                music.append((group[0].start, group[-1].end))
+            group = []
+        elif len(group) > 6:  # never closed: it was speech after all, minus the bracket
+            speech.extend(group[1:])
+            group = []
+    if group and _MUSIC.search(" ".join(g.text for g in group)):
+        music.append((group[0].start, group[-1].end))
+    merged: list[list[float]] = []
+    for a, b in sorted(music):
+        if merged and a - merged[-1][1] <= merge_gap:
+            merged[-1][1] = max(merged[-1][1], b)
+        else:
+            merged.append([a, b])
+    return speech, [(round(a, 2), round(b, 2)) for a, b in merged]
+
+
+def words_from_whisper(data: dict) -> list[Word]:
+    return split_markers(_raw_words(data))[0]
 
 
 def transcript_text(words: list[Word]) -> str:
@@ -144,6 +202,7 @@ def build_ass(
     censor: bool = True,
 ) -> str:
     """`shift` moves every word time (use when the video was trimmed after transcription)."""
+    words, _ = split_markers(words)  # [MUSIC PLAYING] and friends never go on screen
     cap_margin = int(height * 0.245)
     lines = [
         "[Script Info]",

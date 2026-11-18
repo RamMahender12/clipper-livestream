@@ -125,6 +125,9 @@ def auto_gate(cfg: dict, channel_cfg: dict | None, clip: dict, notes: dict) -> t
             return False, "mostly violence: nothing clean enough to keep"
         if gem.get("violence"):
             return False, "still shows violence: " + "; ".join(str(v[2]) for v in gem["violence"][:2])
+        if notes.get("music_heavy") or gem.get("music") == "likely":
+            why = gem.get("music_reason") or "radio or song playing through most of it"
+            return False, f"licensed music likely ({why}): YouTube may claim it, Instagram may mute it"
         if gem.get("is_gta6") is False:
             return False, f"{name} doesn't think this is GTA 6 gameplay"
         if gem.get("streamer_featured") is False:

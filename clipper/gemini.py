@@ -48,6 +48,8 @@ SCHEMA = {
         "age_restriction_reason": {"type": "string"},
         "is_gta6_gameplay": {"type": "boolean"},
         "streamer_featured": {"type": "boolean"},
+        "licensed_music": {"type": "string", "enum": ["none", "possible", "likely"]},
+        "music_reason": {"type": "string"},
         "violent_moments": {"type": "array", "items": {
             "type": "object",
             "properties": {"from_s": {"type": "number"}, "to_s": {"type": "number"}, "what": {"type": "string"}},
@@ -56,7 +58,8 @@ SCHEMA = {
     },
     "required": ["what_happens", "visual_quality", "spoiler_risk", "is_cutscene", "unsafe",
                  "hook_matches", "better_hook", "age_restriction_risk", "age_restriction_reason",
-                 "is_gta6_gameplay", "streamer_featured", "violent_moments", "reason"],
+                 "is_gta6_gameplay", "streamer_featured", "licensed_music", "music_reason",
+                 "violent_moments", "reason"],
 }
 
 FIELDS = """- what_happens: 1-2 sentences describing what is visible and audible.
@@ -70,6 +73,8 @@ FIELDS = """- what_happens: 1-2 sentences describing what is visible and audible
 - age_restriction_reason: a few words on what would trigger it, or "".
 - is_gta6_gameplay: true only if this is gameplay footage from GTA 6 (Grand Theft Auto VI, set in Leonida / Vice City). false for another game (GTA V, Far Cry, RDR2...), or if the clip is mostly a menu, loading screen, the desktop or just the streamer with no game.
 - streamer_featured: true if the streamer is clearly part of the moment (their facecam is visible or their voice reacts to it), false if it is only game footage or someone else.
+- licensed_music: is a real song audible (YouTube Content ID claims these and Instagram mutes them)? "likely" if the in-game radio or a song is playing: a radio station or song title shown on screen, transcript lines that are song lyrics rather than the streamer talking, or music markers like [MUSIC PLAYING]. "possible" if they're driving and a radio could be on. "none" otherwise; the game's own background score doesn't count.
+- music_reason: a few words on what points to it, or "".
 - violent_moments: every stretch where a person or animal is attacked, shot, stabbed, beaten up or killed, or blood or gore is visible, as from_s/to_s in seconds from the start of the clip, plus a few words on what. Use the timestamps you can see; for a moment in a single frame, from_s = to_s. Car crashes, explosions where nobody is shown hurt, falls, police chases and a "wasted" screen on its own are not violence. [] if there is none.
 - reason: one sentence explaining your score."""
 
@@ -374,6 +379,8 @@ def normalize(data: dict, model: str) -> dict:
         "is_gta6": data.get("is_gta6_gameplay") is not False,
         "streamer_featured": data.get("streamer_featured") is not False,
         "violence": _spans(data.get("violent_moments")),
+        "music": m if (m := str(data.get("licensed_music", "")).lower()) in ("none", "possible", "likely") else "none",
+        "music_reason": str(data.get("music_reason", ""))[:120],
         "reason": str(data.get("reason", ""))[:300],
         "model": model,
     }

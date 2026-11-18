@@ -164,7 +164,11 @@ def caption_for(cfg: dict, clip: dict, kind: str) -> str:
     lines.append(f"Hook: {clip.get('hook', '').strip()}")
     if notes.get("violence_cut"):
         k = notes["violence_cut"].get("kept", [0, 0])
-        lines.append(f"✂️ Violence cut: kept {k[0]:.0f}-{k[1]:.0f}s of {notes['violence_cut'].get('was', 0):.0f}s")
+        what = ", ".join(sorted({str(v[2]) for v in notes["violence_cut"].get("removed", [])}))[:80]
+        lines.append(f"✂️ Cut out ({what}): kept {k[0]:.0f}-{k[1]:.0f}s of {notes['violence_cut'].get('was', 0):.0f}s")
+    if notes.get("music_heavy") or gem.get("music") in ("possible", "likely"):
+        lines.append(f"🎵 Licensed music: {gem.get('music') if gem.get('music') != 'none' else 'heavy'}"
+                     + (f" ({gem['music_reason']})" if gem.get("music_reason") else ""))
     if notes.get("hook_swapped"):
         lines.append(f"({gemini_mod.label(gem)}'s hook; the first one, \"{notes['hook_swapped'].get('from', '')}\", "
                      "didn't match the video)")

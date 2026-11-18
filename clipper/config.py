@@ -112,6 +112,12 @@ DEFAULTS: dict = {
         "min_keep_seconds": 6,  # a clean stretch shorter than this means the clip is mostly violence...
         "min_keep_share": 0.4,  # ...as does keeping less than this share of it: such clips are dropped
     },
+    "music": {
+        # in-game radio / songs: YouTube Content ID claims them, Instagram mutes the reel.
+        # Stretches whisper marks as music are cut like violence; music-heavy clips wait for you.
+        "cut": True,
+        "min_seconds": 1.0,  # ignore shorter music markers
+    },
     "review_bot": {
         "enabled": True,  # approve/reject clips from Telegram (needs TELEGRAM_REVIEW_* secrets)
         "max_per_hour": 12,  # clips sent for review per hour (respects quiet hours)

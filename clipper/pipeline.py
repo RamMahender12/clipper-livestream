@@ -62,16 +62,18 @@ def process_clip(db: DB, cfg: dict, clip: dict) -> None:
     # 1. transcript (cached across re-renders)
     if clip["words_json"]:
         words = [captions.Word(**w) for w in json.loads(clip["words_json"])]
+        words, _ = captions.split_markers(words)  # older transcripts kept [MUSIC PLAYING] as words
     else:
         model = config_mod.resolve(cfg, cfg["paths"]["whisper_model"])
+        music: list = []
         try:
-            words = captions.transcribe(src, model, start, dur) if model.exists() else []
+            words, music = captions.transcribe_full(src, model, start, dur) if model.exists() else ([], [])
         except Exception as exc:  # captions are nice-to-have; never lose the clip
             log.warning("clip %s: transcription failed: %s", clip_id, exc)
             words = []
         db.update("clips", clip_id,
                   words_json=json.dumps([w.__dict__ for w in words]),
-                  transcript=captions.transcript_text(words))
+                  transcript=captions.transcript_text(words), music_json=json.dumps(music))
 
     # 2. packaging (hook/title/caption) unless a human already edited it
     if not clip["hook"]:
@@ -133,9 +135,11 @@ def clean_window(duration: float, spans: list, pad: float) -> tuple[float, float
 
 
 def cut_violence(db: DB, cfg: dict, clip_id: int) -> str:
-    """Trim violent moments out: keep the longest clean stretch, re-render it and check it again.
-    Returns "" (nothing to do), "cut", or "mostly" (too little left: drop the clip). Once per clip;
-    never touches a clip you decided on."""
+    """Trim violent moments (and stretches whisper marked as music) out: keep the longest clean
+    stretch, re-render it and check it again. Returns "" (nothing to do), "cut", or "mostly" (too
+    little left without the violence: drop the clip). Music running through most of the clip isn't
+    cut; the clip is marked music_heavy and waits for you. Once per clip; never touches a clip you
+    decided on."""
     vcfg = cfg.get("violence", {})
     if not vcfg.get("cut", True):
         return ""
@@ -144,29 +148,53 @@ def cut_violence(db: DB, cfg: dict, clip_id: int) -> str:
         notes = json.loads(row.get("ai_notes") or "{}")
     except json.JSONDecodeError:
         return ""
-    spans = (notes.get("gemini") or {}).get("violence") or []
-    if not spans or notes.get("violence_cut") or row.get("decided_by") == "human":
+    violent = (notes.get("gemini") or {}).get("violence") or []
+    words, legacy_music = captions.split_markers(
+        [captions.Word(**w) for w in json.loads(row.get("words_json") or "[]")])
+    mcfg = cfg.get("music", {})
+    music = []
+    if mcfg.get("cut", True):
+        music = [[x, y, "radio music"] for x, y in (json.loads(row.get("music_json") or "[]") or legacy_music)
+                 if y - x >= float(mcfg.get("min_seconds", 1.0))]
+    if (not violent and not music) or notes.get("violence_cut") or row.get("decided_by") == "human":
         return ""
     dur = float(row.get("duration_s") or 30)
-    a, b = clean_window(dur, spans, float(vcfg.get("pad_seconds", 1.5)))
-    keep = b - a
-    if keep < max(float(vcfg.get("min_keep_seconds", 6)), float(vcfg.get("min_keep_share", 0.4)) * dur):
+    pad = float(vcfg.get("pad_seconds", 1.5))
+    need = max(float(vcfg.get("min_keep_seconds", 6)), float(vcfg.get("min_keep_share", 0.4)) * dur)
+
+    def fits(spans):
+        w = clean_window(dur, spans, pad)
+        return w if w[1] - w[0] >= need else None
+
+    if violent and not fits(violent):
         notes["violence_mostly"] = True
         db.update("clips", clip_id, ai_notes=json.dumps(notes))
         return "mostly"
+    removed, window = violent + music, fits(violent + music)
+    if window is None:  # the music runs through most of it: cut only the violence, and hold it for you
+        notes["music_heavy"] = True
+        removed, window = violent, (fits(violent) if violent else None)
+        if window is None:
+            db.update("clips", clip_id, ai_notes=json.dumps(notes))
+            return ""
+    a, b = window
+    keep = b - a
+    if keep >= dur - 0.05:  # nothing inside the clip to cut
+        return ""
     if not row.get("source") or not Path(row["source"]).exists():
         return ""
-    words = [captions.Word(**w) for w in json.loads(row.get("words_json") or "[]")]
     kept = [captions.Word(round(w.start - a, 3), round(w.end - a, 3), w.text) for w in words if w.end > a and w.start < b]
-    before = {k: row[k] for k in ("start_s", "duration_s", "words_json", "transcript", "final_path")}
+    before = {k: row[k] for k in ("start_s", "duration_s", "words_json", "transcript", "final_path", "music_json")}
+    left = [[round(max(x, a) - a, 2), round(min(y, b) - a, 2)]
+            for x, y, *_ in (json.loads(row.get("music_json") or "[]") or legacy_music) if y > a and x < b]
     first = Path(row["final_path"]) if row.get("final_path") else None
     backup = first.with_name("final.uncut.mp4") if first and first.exists() else None
     if backup:
         first.replace(backup)
-    notes["violence_cut"] = {"removed": spans, "kept": [a, b], "was": round(dur, 2)}
+    notes["violence_cut"] = {"removed": removed, "kept": [a, b], "was": round(dur, 2)}
     db.update("clips", clip_id, start_s=float(row["start_s"] or 0) + a, duration_s=round(keep, 2),
               words_json=json.dumps([w.__dict__ for w in kept]), transcript=captions.transcript_text(kept),
-              ai_notes=json.dumps(notes))
+              music_json=json.dumps(left), ai_notes=json.dumps(notes))
     ch = config_mod.channel(cfg, row["channel"]) or {"login": row["channel"]}
     try:
         render_final(db, cfg, clip_id, ch, Path(row["source"]), float(row["start_s"] or 0) + a, keep, kept,
@@ -188,6 +216,7 @@ def cut_violence(db: DB, cfg: dict, clip_id: int) -> str:
 def render_final(db: DB, cfg: dict, clip_id: int, ch: dict, src: Path, start: float, dur: float,
                  words: list, hook: str) -> Path:
     ccfg, capcfg = cfg["clip"], cfg["captions"]
+    words, _ = captions.split_markers(words)  # sound markers never go on screen
     out_dir = clips_dir(cfg) / f"{clip_id:05d}"
     out_dir.mkdir(parents=True, exist_ok=True)
     ass_path = None
