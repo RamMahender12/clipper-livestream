@@ -222,8 +222,18 @@ def cmd_autoreview(args, cfg) -> int:
     print(f"history: {st['history']} posts with view data (stats model needs {st['min_history']}); "
           f"auto-approved in last 24h: {st['today']}/{st['limit']}")
     lines = autoapprove.run_once(db, cfg, dry_run=args.dry_run)
-    for line in lines or ["no ready clips to review"]:
+    for line in lines or ["no new clips to review"]:
         print(line)
+    reviewed = {int(line.split(":")[0].split()[-1]) for line in lines if line.startswith("clip ")}
+    waiting = [r for r in autoapprove.waiting_for_human(db) if r["id"] not in reviewed]
+    if waiting:
+        print(f"\n{len(waiting)} ready clip(s) already reviewed and waiting for you in the review UI "
+              "(re-reviewed only after they change):")
+        for r in waiting[:10]:
+            note = (r["decision_note"] or "").split(" | ")[0]
+            print(f"  clip {r['id']} ({r['channel']}): {note or 'held by you'}")
+        if len(waiting) > 10:
+            print(f"  ... and {len(waiting) - 10} more")
     if args.dry_run:
         print("(dry run: nothing changed)")
     return 0

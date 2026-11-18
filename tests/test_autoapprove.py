@@ -155,6 +155,19 @@ class RunOnceTests(unittest.TestCase):
             autoapprove.run_once(self.db, self.cfg)
             self.assertEqual(j.call_count, 0)  # unchanged clips aren't re-reviewed
 
+    def test_held_clips_are_listed_as_waiting(self):
+        good = add_clip(self.db, self.tmp, quality=9)
+        weak = add_clip(self.db, self.tmp, quality=5)
+        fresh = add_clip(self.db, self.tmp, quality=9)
+        self.db.update("clips", fresh, auto_checked_at=0)  # checked before its last change
+        with self.judge():
+            autoapprove.run_once(self.db, self.cfg)
+        self.db.update("clips", fresh, hook="edited")  # changed since review -> not waiting
+        waiting = [r["id"] for r in autoapprove.waiting_for_human(self.db)]
+        self.assertIn(weak, waiting)
+        self.assertNotIn(good, waiting)  # approved
+        self.assertNotIn(fresh, waiting)
+
     def test_human_decisions_are_respected(self):
         cid = add_clip(self.db, self.tmp, decided_by="human")
         with self.judge():

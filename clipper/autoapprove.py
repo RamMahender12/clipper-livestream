@@ -340,6 +340,16 @@ def run_once(db: DB, cfg: dict, dry_run: bool = False) -> list[str]:
     return lines
 
 
+def waiting_for_human(db: DB) -> list:
+    """Ready clips the auto-approver already looked at (and held), or that a
+    human took over. They stay put until someone acts or the clip changes."""
+    return db.query(
+        "SELECT id, channel, decision_note FROM clips WHERE status = 'ready' AND "
+        "(COALESCE(decided_by, '') = 'human' OR "
+        " (auto_checked_at IS NOT NULL AND auto_checked_at >= updated_at)) "
+        "ORDER BY score DESC, id ASC")
+
+
 def status(db: DB, cfg: dict) -> dict:
     acfg = cfg["auto_approve"]
     history, _ = load_history(db, cfg)
