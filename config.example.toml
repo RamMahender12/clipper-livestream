@@ -9,6 +9,7 @@ quality = "1080p60,1080p,720p60,best"
 segment_seconds = 30
 retain_minutes = 90        # raw stream segments older than this are deleted
 poll_seconds = 60          # how often to check whether a channel went live
+keep_awake = true          # stop the Mac idle-sleeping while recording (closing the lid still sleeps it)
 
 [detect]                   # chat-spike detection
 window_seconds = 10

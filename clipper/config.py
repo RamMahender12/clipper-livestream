@@ -21,6 +21,7 @@ DEFAULTS: dict = {
         "segment_seconds": 30,
         "retain_minutes": 90,
         "poll_seconds": 60,
+        "keep_awake": True,  # macOS: block idle sleep while `clipper run` is running
     },
     "detect": {
         "window_seconds": 10,

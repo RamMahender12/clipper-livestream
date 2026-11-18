@@ -198,6 +198,29 @@ def prune(seg_dir: Path, retain_seconds: float, now: float | None = None) -> int
     return removed
 
 
+def kill_orphans(rec_root: Path) -> int:
+    """Stop ffmpeg recorders left behind by a previous run that died without
+    cleaning up (their streamlink feeders exit once ffmpeg is gone)."""
+    try:
+        out = subprocess.run(["pgrep", "-f", str(rec_root)], capture_output=True, text=True).stdout
+    except OSError:
+        return 0
+    killed = 0
+    for tok in out.split():
+        if not tok.isdigit() or int(tok) == os.getpid():
+            continue
+        pid = int(tok)
+        comm = subprocess.run(["ps", "-o", "comm=", "-p", str(pid)], capture_output=True, text=True).stdout
+        if "ffmpeg" not in comm:
+            continue
+        try:
+            os.kill(pid, 15)
+            killed += 1
+        except OSError:
+            pass
+    return killed
+
+
 class Pruner(threading.Thread):
     def __init__(self, root: Path, retain_seconds: float, stop: threading.Event):
         super().__init__(daemon=True, name="pruner")

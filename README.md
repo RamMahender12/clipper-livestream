@@ -32,10 +32,10 @@ mkdir -p models && curl -L -o models/ggml-base.en.bin https://huggingface.co/gge
 .venv/bin/clipper init
 ```
 
-Edit `config.toml`: add each campaign you've joined under `[[campaigns]]` and its streamer under `[[channels]]` with `permission = "campaign:<id>"`. For better hooks and spoiler checks, export your Anthropic key; without it the tool uses simple templates.
+Edit `config.toml`: add each campaign you've joined under `[[campaigns]]` and its streamer under `[[channels]]` with `permission = "campaign:<id>"`. For better hooks, spoiler checks and auto-approve, put your Anthropic key in `secrets/clipper.env` (git-ignored; created by `clipper service install`, or create it yourself). Without it the tool uses simple templates and holds every clip for you.
 
-```bash
-export ANTHROPIC_API_KEY=sk-ant-...
+```
+ANTHROPIC_API_KEY=sk-ant-...
 ```
 
 ```bash
@@ -49,6 +49,35 @@ export ANTHROPIC_API_KEY=sk-ant-...
 ```
 
 Then open http://127.0.0.1:8765. Clips appear under **ready** about a minute after a spike. Edit the hook (Save + re-render burns the new one in), fix the caption, then **Approve**. The scheduler posts approved clips to each platform in `[posting].platforms`, one at a time, respecting the daily caps and minimum gap.
+
+## Run it unattended (macOS)
+
+```bash
+.venv/bin/clipper service install
+```
+
+This installs a per-user launchd agent (`~/Library/LaunchAgents/com.gta6clipper.run.plist`) that runs `clipper run` now and at every login, restarts it within a minute if it crashes, and keeps the Mac from idle-sleeping while it runs. The display can still turn off. **Closing a laptop lid still sleeps the Mac**, so leave it open and plugged in.
+
+API keys go in `secrets/clipper.env` (created by the install, git-ignored, readable only by you), not in the agent definition:
+
+```
+ANTHROPIC_API_KEY=sk-ant-...
+IG_ACCESS_TOKEN=EAA...
+```
+
+The service reads `config.toml` and `secrets/clipper.env` when it starts, so restart it after changing either:
+
+```bash
+.venv/bin/clipper service restart
+```
+
+| Command | Use |
+|---|---|
+| `clipper service status` | Running or not, pid, last exit code |
+| `clipper service stop` / `start` | Pause it (stays stopped until you start it again) |
+| `clipper service uninstall` | Stop it and remove the agent |
+
+Logs: `data/clipper.log` (rotated at 10 MB, 5 kept) and `data/logs/service.log` (startup messages and crashes). While the service runs, a second `clipper run` refuses to start because the dashboard port is taken. Stop the service first if you want to run it by hand.
 
 ## Auto-approve
 
@@ -83,6 +112,7 @@ Other commands:
 | `clipper post` | One posting pass now |
 | `clipper stats --refresh` | Views and estimated campaign earnings, by campaign |
 | `clipper auth youtube` / `clipper auth tiktok` | One-time OAuth consent |
+| `clipper service install` | Run unattended in the background (see below) |
 
 ## Permissions are enforced
 

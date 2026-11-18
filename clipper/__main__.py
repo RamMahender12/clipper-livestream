@@ -12,6 +12,8 @@
   clipper stats [--refresh]    views and estimated campaign earnings
   clipper launch-times         GTA 6 regional unlock times in your timezone
   clipper auth youtube|tiktok  one-time OAuth consent
+  clipper service install|status|restart|stop|start|uninstall
+                               run unattended in the background (macOS launchd)
 """
 from __future__ import annotations
 
@@ -34,9 +36,18 @@ log = logging.getLogger("clipper")
 
 
 def _setup_logging(cfg: dict | None, verbose: bool) -> None:
-    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
+    from logging.handlers import RotatingFileHandler
+
+    from .service import SERVICE_ENV
+
+    handlers: list[logging.Handler] = []
+    if not os.environ.get(SERVICE_ENV):  # launchd already captures stdout to service.log
+        handlers.append(logging.StreamHandler(sys.stdout))
     if cfg:
-        handlers.append(logging.FileHandler(config_mod.data_dir(cfg) / "clipper.log"))
+        handlers.append(RotatingFileHandler(config_mod.data_dir(cfg) / "clipper.log",
+                                            maxBytes=10_000_000, backupCount=5))
+    if not handlers:
+        handlers.append(logging.StreamHandler(sys.stdout))
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.INFO,
         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
@@ -89,6 +100,14 @@ def cmd_doctor(args, cfg) -> int:
     have_key = bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"))
     print(f"  [{'ok' if have_key else '--'}] Anthropic credentials"
           f"{'' if have_key else ' - not set: hooks/titles fall back to templates (export ANTHROPIC_API_KEY=...)'}")
+    from . import service
+
+    env_path = config_mod.ROOT / service.ENV_FILE
+    print(f"  [{'ok' if env_path.exists() else '--'}] secrets file {service.ENV_FILE}"
+          f"{'' if env_path.exists() else ' (created by `clipper service install`)'}")
+    st = service.status(cfg)
+    print(f"  [{'ok' if st['state'] == 'running' else '--'}] background service: "
+          f"{'installed, ' + st['state'] if st['installed'] else 'not installed (clipper service install)'}")
     acfg = cfg["auto_approve"]
     if acfg.get("enabled"):
         print(f"  [{'ok' if have_key else '!!'}] auto-approve ON"
@@ -136,8 +155,19 @@ def _install_signals(stop: threading.Event) -> None:
 
 
 def cmd_run(args, cfg, review_only: bool = False) -> int:
-    from . import recorder, review_server, scheduler, watcher
+    from . import recorder, review_server, scheduler, service, watcher
 
+    host, port = cfg["review"]["host"], int(cfg["review"]["port"])
+    if service.port_in_use(host, port):
+        print(f"Port {port} is busy: clipper is probably already running "
+              f"(check `clipper service status`). Not starting a second copy.")
+        return 1
+    if not review_only:
+        stray = recorder.kill_orphans(config_mod.data_dir(cfg) / "rec")
+        if stray:
+            log.warning("stopped %d recorder(s) left over from a previous run", stray)
+        if cfg["record"].get("keep_awake", True) and service.keep_awake():
+            log.info("keeping the Mac awake while recording (display may still sleep)")
     db = open_db(cfg)
     stop = threading.Event()
     _install_signals(stop)
@@ -236,6 +266,33 @@ def cmd_autoreview(args, cfg) -> int:
             print(f"  ... and {len(waiting) - 10} more")
     if args.dry_run:
         print("(dry run: nothing changed)")
+    return 0
+
+
+def cmd_service(args, cfg) -> int:
+    from . import service
+
+    action = args.action
+    if action == "install":
+        path = service.install(cfg)
+        print(f"Installed {path}")
+        print("It starts now and at every login, restarts if it crashes, and keeps the Mac awake.")
+        print(f"Put API keys in {service.ENV_FILE}, then: .venv/bin/clipper service restart")
+    elif action == "start":
+        service.start()
+    elif action == "stop":
+        service.stop()
+        print("Stopped. It stays stopped until `clipper service start` (or the next install).")
+    elif action == "restart":
+        service.restart()
+    elif action == "uninstall":
+        service.uninstall()
+        print("Stopped and removed the background service.")
+    st = service.status(cfg)
+    print(f"service: {'installed' if st['installed'] else 'not installed'}, {st['state']}"
+          f"{', pid ' + st['pid'] if st['pid'] else ''}"
+          f"{', last exit ' + st['last_exit'] if st['last_exit'] else ''}")
+    print(f"logs: {st['log']}  and  {config_mod.data_dir(cfg) / 'clipper.log'}")
     return 0
 
 
@@ -342,12 +399,17 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("stats")
     s.add_argument("--refresh", action="store_true")
     sub.add_parser("launch-times")
+    sv = sub.add_parser("service")
+    sv.add_argument("action", choices=["install", "status", "start", "stop", "restart", "uninstall"])
     a = sub.add_parser("auth")
     a.add_argument("platform", choices=["youtube", "tiktok", "instagram"])
     args = ap.parse_args(argv)
 
     if args.cmd == "init":
         return cmd_init(args)
+    from .service import load_env_file
+
+    load_env_file()
     cfg = None
     if args.cmd != "launch-times" or (config_mod.ROOT / "config.toml").exists() or args.config:
         cfg = config_mod.load(args.config)
@@ -355,7 +417,7 @@ def main(argv: list[str] | None = None) -> int:
     handlers = {
         "doctor": cmd_doctor, "live": cmd_live, "run": cmd_run, "ingest": cmd_ingest,
         "cut": cmd_cut, "post": cmd_post, "stats": cmd_stats, "launch-times": cmd_launch_times,
-        "auth": cmd_auth, "autoreview": cmd_autoreview,
+        "auth": cmd_auth, "autoreview": cmd_autoreview, "service": cmd_service,
     }
     if args.cmd == "review":
         args.no_watch = args.no_post = True
