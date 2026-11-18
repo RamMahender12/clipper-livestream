@@ -34,7 +34,7 @@ class ClaudeVisionTests(unittest.TestCase):
     def test_review_shape_and_failure(self):
         seen = {}
 
-        def call(cfg, system, user, schema, effort=None, model=None, max_tokens=16000):
+        def call(cfg, system, user, schema, effort=None, model=None, max_tokens=16000, **kw):
             seen.update(model=model, effort=effort, n_images=sum(1 for c in user if c["type"] == "image"),
                         prompt=user[-1]["text"])
             return dict(ANSWER), "claude-sonnet-5-5"

@@ -267,7 +267,9 @@ def judge_clip(cfg: dict, clip: dict, notes: dict, ch: dict | None, camp: dict |
         f"{' (' + est.describe() + ')' if est.parts else ''}"
         f"{f', about {est.expected_views:,} views' if est.expected_views else ''}"
     )
-    return call_json(cfg, JUDGE_SYSTEM, user, JUDGE_SCHEMA, effort=acfg.get("effort", "high"))
+    return call_json(cfg, JUDGE_SYSTEM, user, JUDGE_SCHEMA, effort=acfg.get("effort", "medium"),
+                     model=acfg.get("model") or None, purpose="judge", thinking=acfg.get("thinking", "off"),
+                     max_tokens=4000)
 
 
 # ---------------------------------------------------------------- decision

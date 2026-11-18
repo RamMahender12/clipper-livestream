@@ -151,7 +151,7 @@ class WeakMomentTests(unittest.TestCase):
                       words_json="[]", score=3.0, created_at=now, updated_at=now)
         chat = db.insert("clips", spike_id=7, **common)
         viewer = db.insert("clips", **common)
-        weak = metadata.ClipMeta(hook="h", title="t", caption="c", quality=4, source="claude-opus-5-5")
+        weak = metadata.ClipMeta(hook="h", title="t", caption="c", quality=3, source="claude-haiku-5-5")
         with mock.patch.object(metadata, "generate", return_value=weak), \
                 mock.patch.object(pipeline, "render_final") as render, \
                 mock.patch.object(pipeline, "gemini_review"), mock.patch.object(pipeline, "cut_violence", return_value=""), \
@@ -162,7 +162,7 @@ class WeakMomentTests(unittest.TestCase):
             self.assertEqual(render.call_count, 1)  # viewer clips always get the full check
         row = dict(db.one("SELECT * FROM clips WHERE id = ?", (chat,)))
         self.assertEqual((row["status"], row["decided_by"]), ("rejected", "auto"))
-        self.assertIn("rated it 4/10", row["decision_note"])
+        self.assertIn("rated it 3/10", row["decision_note"])
         self.assertEqual(db.one("SELECT status FROM clips WHERE id = ?", (viewer,))["status"], "ready")
 
 

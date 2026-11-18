@@ -44,6 +44,7 @@ SCHEMA = {
         "unsafe": {"type": "boolean"},
         "hook_matches": {"type": "boolean"},
         "better_hook": {"type": "string"},
+        "better_title": {"type": "string"},
         "age_restriction_risk": {"type": "string", "enum": ["none", "low", "high"]},
         "age_restriction_reason": {"type": "string"},
         "is_gta6_gameplay": {"type": "boolean"},
@@ -57,7 +58,7 @@ SCHEMA = {
         "reason": {"type": "string"},
     },
     "required": ["what_happens", "visual_quality", "spoiler_risk", "is_cutscene", "unsafe",
-                 "hook_matches", "better_hook", "age_restriction_risk", "age_restriction_reason",
+                 "hook_matches", "better_hook", "better_title", "age_restriction_risk", "age_restriction_reason",
                  "is_gta6_gameplay", "streamer_featured", "licensed_music", "music_reason",
                  "violent_moments", "reason"],
 }
@@ -68,7 +69,8 @@ FIELDS = """- what_happens: 1-2 sentences describing what is visible and audible
 - is_cutscene: true if the clip is mostly a non-interactive cinematic (letterbox bars, no game HUD, cinematic camera).
 - unsafe: true for slurs, harassment of a real person, sexual content, or anything against YouTube or Instagram community guidelines.
 - hook_matches: whether the on-screen hook text shown at the start matches what actually happens.
-- better_hook: if the current hook doesn't match or is weak, a replacement of at most 7 words, otherwise "". It is burned into the video, so it must be true to what you saw and spoiler-free, but it has to make a scrolling viewer stop: tease the payoff, the stakes or the absurd part ("He did NOT expect the tiger", "Cops showed up for a parking ticket"). Never a flat description like "Riding around listening to music". No swearing, and no violent or crime words (kill, rob, jumped, beat up, shoot): frame it as the game fail it is ("His heist plan lasted 3 seconds").
+- better_hook: a stronger on-screen hook of at most 7 words, written from what you saw, or "" only if the current one is already accurate and as strong as you could make it. It is burned into the video, so it must be true to what you saw and spoiler-free, but it has to make a scrolling viewer stop: tease the payoff, the stakes or the absurd part of THIS clip, in your own words. Never a flat description of the activity (driving, walking, listening to music). No swearing, and no violent or crime words (kill, rob, jumped, beat up, shoot): frame it as the game fail it is.
+- better_title: a YouTube Shorts title of at most 70 characters, written from what you saw, with the streamer's name and "GTA 6", the same clean-language rules as the hook, or "" if the current title is already accurate and strong.
 - age_restriction_risk: how likely YouTube is to age-restrict it (18+, hidden from most Shorts viewers). "high" if violence is the focus (a beating, someone being attacked or killed up close, blood, torture, cruelty to animals), it shows or jokes about sexual content or nudity, it features drug use, heavy or repeated swearing is audible in the first seconds, or the framing is a real-world crime (robbing, stealing from a kid) rather than a game fail. "low" for ordinary game action (car chases, crashes, shootouts at a distance, getting wasted by a bird) with mild language. "none" otherwise.
 - age_restriction_reason: a few words on what would trigger it, or "".
 - is_gta6_gameplay: true only if this is gameplay footage from GTA 6 (Grand Theft Auto VI, set in Leonida / Vice City). false for another game (GTA V, Far Cry, RDR2...), or if the clip is mostly a menu, loading screen, the desktop or just the streamer with no game.
@@ -78,7 +80,7 @@ FIELDS = """- what_happens: 1-2 sentences describing what is visible and audible
 - violent_moments: every stretch where a person or animal is attacked, shot, stabbed, beaten up or killed, or blood or gore is visible, as from_s/to_s in seconds from the start of the clip, plus a few words on what. Use the timestamps you can see; for a moment in a single frame, from_s = to_s. Car crashes, explosions where nobody is shown hurt, falls, police chases and a "wasted" screen on its own are not violence. [] if there is none.
 - reason: one sentence explaining your score."""
 
-CONTEXT = """Context: streamer {streamer}. On-screen hook: {hook!r}. Chat was spamming: {chat}. Transcript (auto-generated, may contain errors): {transcript!r}"""
+CONTEXT = """Context: streamer {streamer}. On-screen hook: {hook!r}. Title: {title!r}. Chat was spamming: {chat}. Transcript (auto-generated, may contain errors): {transcript!r}"""
 
 PROMPT = ("You are reviewing a vertical short (about 30 seconds) cut from a live Twitch stream of the video game "
           "GTA 6 during its launch week. It will be posted to a clip page on YouTube Shorts and Instagram Reels. "
@@ -324,14 +326,15 @@ def ask(cfg: dict, key: str, file: dict, prompt: str) -> tuple[dict, str]:
     return _parse_json(generate_content_text(json.loads(raw))), model
 
 
-def review(cfg: dict, video: Path, *, streamer: str, hook: str, transcript: str, chat_terms: list[str]) -> dict:
+def review(cfg: dict, video: Path, *, streamer: str, hook: str, transcript: str, chat_terms: list[str],
+           title: str = "") -> dict:
     """Ask Gemini about one rendered clip. Returns a normalised review dict; raises GeminiError."""
     if cfg["gemini"].get("backend") == "claude":
         from . import claude_vision
 
         return claude_vision.review(cfg, video, streamer=streamer, hook=hook, transcript=transcript,
-                                    chat_terms=chat_terms)
-    prompt = PROMPT.format(streamer=streamer, hook=hook, chat=", ".join(chat_terms) or "n/a",
+                                    chat_terms=chat_terms, title=title)
+    prompt = PROMPT.format(streamer=streamer, hook=hook, title=title, chat=", ".join(chat_terms) or "n/a",
                            transcript=transcript[:1500] or "(no speech)")
     if cfg["gemini"].get("backend", "vertex") == "vertex":
         proxy = make_proxy(video)
@@ -374,6 +377,7 @@ def normalize(data: dict, model: str) -> dict:
         "unsafe": bool(data.get("unsafe")),
         "hook_matches": data.get("hook_matches") is not False,
         "better_hook": str(data.get("better_hook", ""))[:60],
+        "better_title": str(data.get("better_title", ""))[:100],
         "age_risk": age if (age := str(data.get("age_restriction_risk", "")).lower()) in RISK_RANK else "low",
         "age_reason": str(data.get("age_restriction_reason", ""))[:160],
         "is_gta6": data.get("is_gta6_gameplay") is not False,

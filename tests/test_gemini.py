@@ -230,7 +230,7 @@ class HookSwapTests(unittest.TestCase):
             created_at=now, updated_at=now)
         self.hooks_seen = []
 
-    def review(self, cfg, path, streamer, hook, transcript, chat_terms):
+    def review(self, cfg, path, streamer, hook, transcript, chat_terms, title=""):
         self.hooks_seen.append(hook)
         return {**GEM, "quality": 7, "hook_matches": True}
 
@@ -248,13 +248,38 @@ class HookSwapTests(unittest.TestCase):
         row = dict(self.db.one("SELECT * FROM clips WHERE id = ?", (self.cid,)))
         notes = json.loads(row["ai_notes"])
         self.assertEqual(row["hook"], "Tiger ambush at the gas station")
-        self.assertEqual(notes["hook_swapped"], {"from": "LACY steals a jet", "to": "Tiger ambush at the gas station"})
+        self.assertEqual(notes["hook_swapped"], {"from": "LACY steals a jet", "to": "Tiger ambush at the gas station",
+                                                 "why": "mismatch"})
         self.assertEqual(self.hooks_seen, ["Tiger ambush at the gas station"])  # Gemini re-checked the new one
         self.assertTrue(notes["gemini"]["hook_matches"])
         self.assertEqual(self.video.read_bytes(), b"render with Tiger ambush at the gas station")
         self.assertFalse((self.tmp / "final.first.mp4").exists())
         ok, why = guardrails.auto_gate(self.cfg, self.cfg["channels"][0], row, notes)
         self.assertTrue(ok, why)
+
+    def test_sharpens_good_clips_and_updates_the_title(self):
+        good = {**GEM, "quality": 7, "hook_matches": True, "better_hook": "The tiger had other plans",
+                "better_title": "LACY Meets a GTA 6 Tiger Up Close"}
+        self.db.update("clips", self.cid, quality=6, title="old title",
+                       ai_notes=json.dumps({"source": "claude", "claude_quality": 6, "gemini": good}))
+        with mock.patch.object(gemini, "configured", return_value=True), \
+                mock.patch.object(gemini, "review", side_effect=self.review), \
+                mock.patch.object(pipeline, "render_final", side_effect=self.render):
+            self.assertTrue(pipeline.swap_hook(self.db, self.cfg, self.cid))
+        row = dict(self.db.one("SELECT * FROM clips WHERE id = ?", (self.cid,)))
+        notes = json.loads(row["ai_notes"])
+        self.assertEqual((row["hook"], row["title"]), ("The tiger had other plans", "LACY Meets a GTA 6 Tiger Up Close"))
+        self.assertEqual(notes["hook_swapped"]["why"], "sharper")
+        self.assertEqual(notes["title_swapped"]["from"], "old title")
+
+    def test_weak_clips_keep_their_hook_unless_it_misleads(self):
+        good = {**GEM, "quality": 4, "hook_matches": True, "better_hook": "Something punchier", "better_title": "New"}
+        self.db.update("clips", self.cid, quality=4, title="old title",
+                       ai_notes=json.dumps({"source": "claude", "claude_quality": 4, "gemini": good}))
+        with mock.patch.object(pipeline, "render_final") as render:
+            self.assertFalse(pipeline.swap_hook(self.db, self.cfg, self.cid))
+            render.assert_not_called()  # not worth a re-render
+        self.assertEqual(self.db.one("SELECT title FROM clips WHERE id = ?", (self.cid,))["title"], "old title")
 
     def test_leaves_your_clips_alone_and_survives_a_failed_render(self):
         self.db.update("clips", self.cid, decided_by="human")

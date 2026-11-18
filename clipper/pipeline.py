@@ -251,10 +251,12 @@ def render_final(db: DB, cfg: dict, clip_id: int, ch: dict, src: Path, start: fl
 
 
 def swap_hook(db: DB, cfg: dict, clip_id: int) -> bool:
-    """Gemini watched the clip and says the burned-in hook doesn't match what happens: burn in
-    the hook it wrote instead, re-render, and let it check again. Once per clip, so a second
-    mismatch still waits for you."""
-    if not cfg["gemini"].get("swap_hook", True):
+    """The video check looked at the clip and wrote its own hook and title. Use them when our hook
+    doesn't match what happens, or (sharpen_hooks) when the clip is good enough to be worth a sharper
+    one: the title is just updated, the hook is burned in, so the clip is re-rendered and checked
+    again. Once per clip, never on a clip you decided on or a hook you wrote."""
+    g = cfg["gemini"]
+    if not g.get("swap_hook", True):
         return False
     row = dict(db.one("SELECT * FROM clips WHERE id = ?", (clip_id,)))
     try:
@@ -262,11 +264,21 @@ def swap_hook(db: DB, cfg: dict, clip_id: int) -> bool:
     except json.JSONDecodeError:
         return False
     gem = notes.get("gemini") or {}
+    if row.get("decided_by") == "human" or notes.get("hook_swapped"):
+        return False
+    good_enough = int(row.get("quality") or 0) >= int(g.get("sharpen_min_quality", 5))
+    mismatch = gem.get("hook_matches") is False
+    sharpen = bool(g.get("sharpen_hooks", True)) and good_enough
+    title = (gem.get("better_title") or "").strip()
+    if title and (sharpen or mismatch) and title != (row.get("title") or "").strip() and not notes.get("title_swapped"):
+        notes["title_swapped"] = {"from": row.get("title") or "", "to": title}
+        db.update("clips", clip_id, title=title, ai_notes=json.dumps(notes))
+        row["title"] = title
     new = (gem.get("better_hook") or "").strip()
     old = (row.get("hook") or "").strip()
-    if gem.get("hook_matches") is not False or not new or new.lower() == old.lower() or notes.get("hook_swapped"):
+    if not new or new.lower() == old.lower() or not (mismatch or sharpen):
         return False
-    if row.get("decided_by") == "human" or not row.get("source") or not Path(row["source"]).exists():
+    if not row.get("source") or not Path(row["source"]).exists():
         return False
     ch = config_mod.channel(cfg, row["channel"]) or {"login": row["channel"]}
     words = [captions.Word(**w) for w in json.loads(row.get("words_json") or "[]")]
@@ -274,7 +286,7 @@ def swap_hook(db: DB, cfg: dict, clip_id: int) -> bool:
     backup = first.with_name("final.first.mp4") if first and first.exists() else None
     if backup:
         first.replace(backup)
-    notes["hook_swapped"] = {"from": old, "to": new}
+    notes["hook_swapped"] = {"from": old, "to": new, "why": "mismatch" if mismatch else "sharper"}
     db.update("clips", clip_id, hook=new, ai_notes=json.dumps(notes))
     try:
         render_final(db, cfg, clip_id, ch, Path(row["source"]), float(row["start_s"] or 0),
@@ -324,7 +336,8 @@ def gemini_review(db: DB, cfg: dict, clip_id: int) -> bool:
     try:
         gem = gemini.review(cfg, Path(row["final_path"]),
                             streamer=ch.get("display_name") or row["channel"],
-                            hook=(row.get("hook") or "").strip(), transcript=row.get("transcript") or "",
+                            hook=(row.get("hook") or "").strip(), title=(row.get("title") or "").strip(),
+                            transcript=row.get("transcript") or "",
                             chat_terms=(spike["top_terms"].split(",") if spike and spike["top_terms"]
                                         else [row["source_note"]] if row.get("source_note") else []))
     except Exception as exc:  # network, quota, policy, parse: keep Claude's verdict

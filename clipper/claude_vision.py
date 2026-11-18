@@ -66,15 +66,17 @@ def build_content(frames: list[tuple[float, bytes]], prompt: str) -> list[dict]:
     return content
 
 
-def review(cfg: dict, video: Path, *, streamer: str, hook: str, transcript: str, chat_terms: list[str]) -> dict:
+def review(cfg: dict, video: Path, *, streamer: str, hook: str, transcript: str, chat_terms: list[str],
+           title: str = "") -> dict:
     g = cfg["gemini"]
     frames = sample_frames(video, int(g.get("frames", 8)), int(g.get("frame_width", 432)))
     prompt = ("Answer these about the clip:\n\n" + FIELDS + "\n\n" +
-              CONTEXT.format(streamer=streamer, hook=hook, chat=", ".join(chat_terms) or "n/a",
+              CONTEXT.format(streamer=streamer, hook=hook, title=title, chat=", ".join(chat_terms) or "n/a",
                              transcript=transcript[:1500] or "(no speech)"))
     data, model = ai.call_json(cfg, SYSTEM, build_content(frames, prompt), schema(),
-                               effort=g.get("claude_effort", "medium"),
-                               model=g.get("claude_model", "claude-sonnet-5-5"), max_tokens=8000)
+                               effort=g.get("claude_effort", "low"),
+                               model=g.get("claude_model", "claude-sonnet-5-5"), max_tokens=4000,
+                               purpose="video_check", thinking=g.get("claude_thinking", "off"))
     if data is None:
         raise GeminiError(f"Claude video check failed: {model}")
     return normalize(data, model)

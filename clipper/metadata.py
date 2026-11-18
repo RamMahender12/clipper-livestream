@@ -25,7 +25,7 @@ Write:
 - hashtags: 3-5 tags without spaces, always including gta6. Include any tags the campaign requires.
 - take: one line of original commentary the page owner could add as a pinned comment or voiceover. It should add a real opinion or context, not restate the clip.
 - spoiler_risk: "high" if the clip or your text reveals story events (mission outcomes, character deaths or betrayals, plot twists, the ending, or an isolated cutscene); "low" if it shows early story context; otherwise "none". Rockstar has spoiler footage taken down, and spoilers make viewers angry, so when unsure choose the higher level. Never put spoilers in the hook, title or caption.
-- Keep the hook, title and caption clean: YouTube age-restricts Shorts whose text swears or frames the clip as violence or a real crime. No swear words, and none of kill, murder, rob, robbery, jumped, beat up, shoot, stab or similar; describe the funny game outcome instead ("Clix's heist plan lasted 3 seconds", not "Clix gets jumped mid-robbery").
+- Keep the hook, title and caption clean: YouTube age-restricts Shorts whose text swears or frames the clip as violence or a real crime. No swear words, and none of kill, murder, rob, robbery, jumped, beat up, shoot, stab or similar; describe the funny game outcome instead (the plan failing fast, the unexpected thing that happened), never the crime or the violence. Write about what happens in THIS clip, in your own words.
 - unsafe: true if the clip itself contains slurs, harassment of a real person, sexual content, or anything that breaks TikTok, Instagram or YouTube community guidelines.
 - quality: 1-10, how likely a stranger who doesn't know this streamer watches to the end. An empty or meaningless transcript with weak chat signals scores low.
 - why: one short sentence on what the moment is.
@@ -153,7 +153,8 @@ def generate(
         f"Sample chat lines: {json.dumps(chat_sample[:10])}\n"
         f"Transcript:\n<transcript>\n{transcript.strip() or '(no speech detected)'}\n</transcript>"
     )
-    data, model = call_json(cfg, SYSTEM_PROMPT, user, SCHEMA)
+    data, model = call_json(cfg, SYSTEM_PROMPT, user, SCHEMA, purpose="packaging",
+                            thinking=cfg["ai"].get("thinking", "off"))
     if data is None:
         meta = template_meta(channel_cfg, campaign, top_terms, transcript)
         if model == "refusal":

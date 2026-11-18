@@ -64,9 +64,13 @@ DEFAULTS: dict = {
     },
     "ai": {
         "enabled": True,
-        "min_quality_to_render": 5,  # chat-spike clips Claude scores below this aren't rendered or reviewed
-        "model": "claude-opus-5-5",
-        "effort": "medium",
+        "min_quality_to_render": 4,  # chat-spike clips scored below this aren't rendered (Haiku: 4 kept all good)
+        # packaging (hook/title/caption/score) runs on every clip: the cheapest model, thinking off.
+        # Launch day on Opus: ~$0.03 a clip, ~80% of a $10 day. Haiku: well under a tenth of a cent.
+        "model": "claude-haiku-5-5",
+        "effort": "low",
+        "thinking": "off",
+        "daily_budget_usd": 3.0,  # Claude calls stop for the rest of the UTC day past this (Telegram alert)
         "page_handle": "@yourpage",
         "niche": "GTA 6 launch-week clips",
         "voice": "short, punchy, funny, never mean; no spoilers",
@@ -94,11 +98,14 @@ DEFAULTS: dict = {
         "weight": 0.6,  # share of the final score from Gemini's visual score
         "disagree_points": 3,  # scores this far apart are held for you
         "swap_hook": True,  # hook doesn't match the video: burn in Gemini's, re-render, re-check (once)
+        "sharpen_hooks": True,  # also use the video check's hook/title on clips worth it (from what it saw)
+        "sharpen_min_quality": 5,  # ...when the clip's combined quality is at least this
         # backend "claude": Claude looks at frames sampled from the clip (no Google account needed)
         "claude_model": "claude-sonnet-5-5",
-        "claude_effort": "medium",
-        "frames": 12,
-        "frame_width": 432,
+        "claude_effort": "low",
+        "claude_thinking": "off",
+        "frames": 8,
+        "frame_width": 360,
         # breaker: stop calling a failing reviewer instead of hammering it (alerts once on Telegram)
         "max_per_hour": 60,
         "fail_limit": 3,  # failures in a row before pausing...
@@ -168,7 +175,9 @@ DEFAULTS: dict = {
         "expire_hours": 12,  # unposted ready clips older than this are dropped
         "allow_spoiler_low": False,
         "veto_minutes": 10,  # auto-approved clips wait this long before posting
-        "effort": "high",
+        "model": "claude-sonnet-5-5",  # the judge only sees clips that could pass the bar
+        "effort": "medium",
+        "thinking": "off",
         "examples": 6,  # best/worst past posts shown to Claude
     },
     "youtube": {
