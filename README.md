@@ -107,6 +107,27 @@ The service reads `config.toml` and `secrets/clipper.env` when it starts, so res
 
 Logs: `data/clipper.log` (rotated at 10 MB, 5 kept) and `data/logs/service.log` (startup messages and crashes). While the service runs, a second `clipper run` refuses to start because the dashboard port is taken. Stop the service first if you want to run it by hand.
 
+## Phone workflow (Telegram)
+
+Two bots, two jobs:
+
+| Bot | Sends you | Secrets |
+|---|---|---|
+| Alerts bot | "New posts live, submit by HH:MM" with the links grouped by campaign; posting failures; new GTA 6 campaigns (checked every 20 min) | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` |
+| Review bot | Each clip that needs your decision as a playable video with **✅ Approve · ❌ Reject · ✏️ Edit**; auto-approved clips with **↩️ Undo** | `TELEGRAM_REVIEW_BOT_TOKEN`, `TELEGRAM_REVIEW_CHAT_ID` |
+
+Set up each one by creating a bot with @BotFather, putting its token in `secrets/clipper.env`, pressing **Start** in the bot, then running:
+
+```bash
+.venv/bin/clipper telegram setup
+```
+
+```bash
+.venv/bin/clipper telegram setup --review
+```
+
+Then redeploy. The review bot sends at most `[review_bot] max_per_hour` clips (default 12), 3 at a time, and nothing during quiet hours. `/next` sends more at once and `/status` shows the queue. It only accepts taps and commands from your own chat. Spoiler-flagged, unsafe, test and pre-release clips are never sent. Approving there is the same as approving in the dashboard: the clip posts to its streamer's accounts within a minute.
+
 ## Auto-approve
 
 With `[auto_approve] enabled = true` and `ANTHROPIC_API_KEY` set, the AI approves clips for you every few minutes. Each ready clip gets two opinions:

@@ -78,6 +78,13 @@ DEFAULTS: dict = {
         "earliest_footage": "2026-11-18T11:00:00+00:00",
     },
     "stats": {"refresh_minutes": 120},
+    "review_bot": {
+        "enabled": True,  # approve/reject clips from Telegram (needs TELEGRAM_REVIEW_* secrets)
+        "max_per_hour": 12,  # clips sent for review per hour (respects quiet hours)
+        "per_push": 3,  # clips sent per minute while catching up
+        "push_every_seconds": 60,
+        "dashboard_url": "https://gta6clipper.dawnlights.in/",
+    },
     "campaign_watch": {
         "enabled": True,  # Telegram alert when a new matching Content Rewards campaign appears
         "interval_minutes": 20,

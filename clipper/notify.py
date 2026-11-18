@@ -5,6 +5,7 @@ Content Rewards has no API, so every post must be submitted by hand within
 batch with the links, grouped by campaign, plus the campaign's submit page.
 
 Secrets (in secrets/clipper.env): TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID.
+The review bot (clipper.telegram_review) is a separate bot with its own token.
 """
 from __future__ import annotations
 
@@ -26,8 +27,8 @@ def configured() -> bool:
     return bool(os.environ.get("TELEGRAM_BOT_TOKEN") and os.environ.get("TELEGRAM_CHAT_ID"))
 
 
-def _call(method: str, params: dict, timeout: float = 15) -> dict:
-    token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+def _call(method: str, params: dict, timeout: float = 15, token: str | None = None) -> dict:
+    token = token or os.environ.get("TELEGRAM_BOT_TOKEN", "")
     data = urllib.parse.urlencode(params).encode()
     req = urllib.request.Request(API.format(token=token, method=method), data=data)
     with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -50,9 +51,9 @@ def send(text: str) -> bool:
         return False
 
 
-def find_chat_ids() -> list[tuple[str, str]]:
+def find_chat_ids(token: str | None = None) -> list[tuple[str, str]]:
     """Chats that recently messaged the bot: [(chat_id, name)]. Used once at setup."""
-    out = _call("getUpdates", {"timeout": 0})
+    out = _call("getUpdates", {"timeout": 0}, token=token)
     seen: dict[str, str] = {}
     for upd in out.get("result", []):
         msg = upd.get("message") or upd.get("channel_post") or {}

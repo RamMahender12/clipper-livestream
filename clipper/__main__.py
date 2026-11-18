@@ -13,7 +13,7 @@
   clipper launch-times         GTA 6 regional unlock times in your timezone
   clipper auth youtube --channel LOGIN   link a streamer's YouTube channel (one-time)
   clipper instagram-accounts   list Instagram Business account IDs for the token
-  clipper telegram setup|test  connect and test phone alerts
+  clipper telegram setup|test [--review]  connect the alerts bot (or the review bot)
   clipper campaigns            check for new GTA 6 campaigns now (Telegram alert)
   clipper service install|status|restart|stop|start|uninstall
                                run unattended in the background (macOS launchd)
@@ -152,6 +152,10 @@ def cmd_doctor(args, cfg) -> int:
             line(good, f"{p} for {ch['login']}", (msg or "").splitlines()[0] if msg else account)
     print(f"  [{'ok' if notify.configured() else '--'}] Telegram alerts"
           f"{'' if notify.configured() else ' - not set up (clipper telegram setup)'}")
+    from . import telegram_review
+
+    print(f"  [{'ok' if telegram_review.configured() else '--'}] Telegram review bot"
+          f"{'' if telegram_review.configured() else ' - not set up (clipper telegram setup --review)'}")
     print("\nAll good." if ok else "\nFix the !! items above.")
     return 0 if ok else 1
 
@@ -206,6 +210,14 @@ def cmd_run(args, cfg, review_only: bool = False) -> int:
         pipeline.RenderWorker(db, cfg, stop, i).start()
     if not review_only and not args.no_post:
         scheduler.Scheduler(db, cfg, stop).start()
+    if not review_only and cfg["review_bot"].get("enabled"):
+        from . import telegram_review
+
+        if telegram_review.configured():
+            telegram_review.ReviewBot(db, cfg, stop).start()
+            log.info("Telegram review bot ON")
+        else:
+            log.info("Telegram review bot off: not set up (clipper telegram setup --review)")
     if not review_only and cfg["campaign_watch"].get("enabled"):
         from . import notify
         from .campaign_watch import CampaignWatcher
@@ -455,27 +467,36 @@ def cmd_instagram_accounts(args, cfg) -> int:
 
 
 def cmd_telegram(args, cfg) -> int:
-    from . import notify, service
+    """Connect a bot: the alerts bot, or with --review the clip-review bot."""
+    from . import notify, service, telegram_review
 
-    if not os.environ.get("TELEGRAM_BOT_TOKEN"):
-        print("Add TELEGRAM_BOT_TOKEN=... (from @BotFather) to secrets/clipper.env first.")
+    token_env, chat_env = (("TELEGRAM_REVIEW_BOT_TOKEN", "TELEGRAM_REVIEW_CHAT_ID") if args.review
+                           else ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"))
+    token = os.environ.get(token_env, "")
+    if not token:
+        print(f"Add {token_env}=... (from @BotFather) to secrets/clipper.env first.")
         return 1
     if args.action == "setup":
-        chats = notify.find_chat_ids()
+        chats = notify.find_chat_ids(token=token)
         if not chats:
-            print("No messages found. Open your bot in Telegram, press Start (or send 'hi'), then run this again.")
+            print("No messages found. Open the bot in Telegram, press Start (or send 'hi'), then run this again.")
             return 1
         chat_id, name = chats[-1]
         env_path = config_mod.ROOT / service.ENV_FILE
         text = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
-        lines = [l for l in text.splitlines() if not l.strip().startswith("TELEGRAM_CHAT_ID=")]
-        lines.append(f"TELEGRAM_CHAT_ID={chat_id}")
+        lines = [l for l in text.splitlines() if not l.strip().startswith(f"{chat_env}=")]
+        lines.append(f"{chat_env}={chat_id}")
         env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         os.chmod(env_path, 0o600)
-        os.environ["TELEGRAM_CHAT_ID"] = chat_id
-        print(f"Saved TELEGRAM_CHAT_ID for chat '{name}'.")
-    ok = notify.send("Clipper alerts are connected. You'll get a message with links to submit "
-                     "every time new clips go live.")
+        os.environ[chat_env] = chat_id
+        print(f"Saved {chat_env} for chat '{name}'.")
+    if args.review:
+        out = telegram_review.api("sendMessage", {"chat_id": os.environ.get(chat_env, ""),
+                                                  "text": "Review bot connected.\n\n" + telegram_review.HELP})
+        ok = bool(out.get("ok"))
+    else:
+        ok = notify.send("Clipper alerts are connected. You'll get a message with links to submit "
+                         "every time new clips go live.")
     print("Test message sent." if ok else "Sending failed: check the bot token and that you pressed Start.")
     return 0 if ok else 1
 
@@ -521,6 +542,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("instagram-accounts")
     tg = sub.add_parser("telegram")
     tg.add_argument("action", choices=["setup", "test"])
+    tg.add_argument("--review", action="store_true", help="the clip-review bot instead of the alerts bot")
     args = ap.parse_args(argv)
 
     if args.cmd == "init":
