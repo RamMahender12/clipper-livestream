@@ -33,6 +33,25 @@ class CombineTests(unittest.TestCase):
         self.assertEqual((out["quality"], out["spoiler"], out["disagree"]), (8, "none", False))
 
 
+class TiebreakTests(unittest.TestCase):
+    def test_views_settle_a_split_but_never_safety(self):
+        split = gemini.combine(3, "none", False, {**GEM, "quality": 6})
+        self.assertTrue(split["disagree"])
+        strong = gemini.tiebreak(split, 3, 6, "strong", "1,616 views on Twitch")
+        self.assertEqual((strong["quality"], strong["disagree"]), (6, False))
+        self.assertIn("Gemini's 6/10", strong["tiebreak"])
+        weak = gemini.tiebreak(split, 3, 6, "weak")
+        self.assertEqual((weak["quality"], weak["disagree"]), (3, False))
+        self.assertIn("Claude's 3/10", weak["tiebreak"])
+        for unsure in ("neutral", None):  # no clear audience signal: still your call
+            self.assertTrue(gemini.tiebreak(split, 3, 6, unsure)["disagree"])
+        agreed = gemini.combine(6, "none", False, GEM)
+        self.assertIs(gemini.tiebreak(agreed, 6, 8, "strong"), agreed)
+        risky = gemini.combine(3, "none", True, {**GEM, "quality": 6, "spoiler": "high"})
+        out = gemini.tiebreak(risky, 3, 6, "strong")
+        self.assertEqual((out["unsafe"], out["spoiler"]), (True, "high"))
+
+
 class ParseTests(unittest.TestCase):
     def test_response_shapes(self):
         resp = {"status": "completed", "steps": [
@@ -166,6 +185,80 @@ class PipelineMergeTests(unittest.TestCase):
                 mock.patch.object(gemini, "review", side_effect=gemini.GeminiError("quota")):
             self.assertFalse(pipeline.gemini_review(db, cfg, cid))
         self.assertIn("quota", json.loads(db.one("SELECT ai_notes FROM clips WHERE id = ?", (cid,))["ai_notes"])["gemini_error"])
+        # a well-viewed Twitch viewer clip: the views break the tie and the gate opens
+        db.update("clips", cid, source_views=1616, source_pct=0.97)
+        with mock.patch.object(gemini, "configured", return_value=True), \
+                mock.patch.object(gemini, "review", return_value=dict(GEM)):
+            self.assertTrue(pipeline.gemini_review(db, cfg, cid))
+        row = dict(db.one("SELECT * FROM clips WHERE id = ?", (cid,)))
+        notes = json.loads(row["ai_notes"])
+        self.assertEqual((row["quality"], notes["disagree"]), (8, False))
+        self.assertIn("1,616 views", notes["tiebreak"])
+        ok, why = guardrails.auto_gate(cfg, cfg["channels"][0], row, notes)
+        self.assertTrue(ok, why)
+
+
+
+class HookSwapTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.cfg = config_mod._merge(config_mod.DEFAULTS, {
+            "paths": {"data_dir": str(self.tmp)},
+            "campaigns": [{"id": "c1"}],
+            "channels": [{"login": "lacy", "permission": "campaign:c1"}],
+        })
+        self.db = DB(self.tmp / "t.db")
+        src = self.tmp / "src.mp4"
+        src.write_bytes(b"src")
+        self.video = self.tmp / "final.mp4"
+        self.video.write_bytes(b"first render")
+        now = time.time()
+        miss = {**GEM, "quality": 7, "hook_matches": False, "better_hook": "Tiger ambush at the gas station"}
+        self.cid = self.db.insert(
+            "clips", channel="lacy", status="rendering", source=str(src), start_s=0, duration_s=20,
+            final_path=str(self.video), quality=7, spoiler_risk="none", hook="LACY steals a jet", transcript="t",
+            words_json="[]", ai_notes=json.dumps({"source": "claude-opus-5-5", "claude_quality": 7,
+                                                  "claude_spoiler": "none", "claude_unsafe": False,
+                                                  "gemini": miss}),
+            created_at=now, updated_at=now)
+        self.hooks_seen = []
+
+    def review(self, cfg, path, streamer, hook, transcript, chat_terms):
+        self.hooks_seen.append(hook)
+        return {**GEM, "quality": 7, "hook_matches": True}
+
+    def render(self, db, cfg, clip_id, ch, src, start, dur, words, hook):
+        self.video.write_bytes(b"render with " + hook.encode())
+        db.update("clips", clip_id, final_path=str(self.video))
+        return self.video
+
+    def test_swaps_once_and_rechecks(self):
+        with mock.patch.object(gemini, "configured", return_value=True), \
+                mock.patch.object(gemini, "review", side_effect=self.review), \
+                mock.patch.object(pipeline, "render_final", side_effect=self.render):
+            self.assertTrue(pipeline.swap_hook(self.db, self.cfg, self.cid))
+            self.assertFalse(pipeline.swap_hook(self.db, self.cfg, self.cid))  # once per clip
+        row = dict(self.db.one("SELECT * FROM clips WHERE id = ?", (self.cid,)))
+        notes = json.loads(row["ai_notes"])
+        self.assertEqual(row["hook"], "Tiger ambush at the gas station")
+        self.assertEqual(notes["hook_swapped"], {"from": "LACY steals a jet", "to": "Tiger ambush at the gas station"})
+        self.assertEqual(self.hooks_seen, ["Tiger ambush at the gas station"])  # Gemini re-checked the new one
+        self.assertTrue(notes["gemini"]["hook_matches"])
+        self.assertEqual(self.video.read_bytes(), b"render with Tiger ambush at the gas station")
+        self.assertFalse((self.tmp / "final.first.mp4").exists())
+        ok, why = guardrails.auto_gate(self.cfg, self.cfg["channels"][0], row, notes)
+        self.assertTrue(ok, why)
+
+    def test_leaves_your_clips_alone_and_survives_a_failed_render(self):
+        self.db.update("clips", self.cid, decided_by="human")
+        self.assertFalse(pipeline.swap_hook(self.db, self.cfg, self.cid))
+        self.db.update("clips", self.cid, decided_by="")
+        with mock.patch.object(pipeline, "render_final", side_effect=RuntimeError("ffmpeg")):
+            self.assertFalse(pipeline.swap_hook(self.db, self.cfg, self.cid))
+        row = dict(self.db.one("SELECT * FROM clips WHERE id = ?", (self.cid,)))
+        self.assertEqual(row["hook"], "LACY steals a jet")
+        self.assertNotIn("hook_swapped", json.loads(row["ai_notes"]))
+        self.assertEqual(self.video.read_bytes(), b"first render")  # first render kept
 
 
 if __name__ == "__main__":

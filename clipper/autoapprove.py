@@ -179,6 +179,8 @@ Decide:
 - hold: unclear, so a human should look (borderline moment, packaging needs a fix, or too little evidence).
 - reject: boring, confusing without context, misleading packaging, breaks the brief, or anything that could hurt the account.
 
+View minimums in a campaign brief (for example a pool that needs 750K approved views) are totals across all of the page's posts, never a bar a single clip has to clear: judge each clip on whether it beats a typical post.
+
 Judge the moment itself from the transcript and chat's reaction. Use the past examples to learn what this page's audience responds to; when history is thin, rely on your own sense of what makes people stop scrolling. Never approve a clip that spoils GTA 6's story, contains slurs or harassment, or whose hook promises something the clip doesn't show.
 
 confidence is 1-10. predicted_percentile is 0-100: where you expect this clip to land among the page's past posts."""
@@ -230,7 +232,9 @@ def _gemini_line(notes: dict) -> str:
     return (f"A second reviewer (Gemini) watched the video: {g.get('what_happens', '')} "
             f"Visual quality {g.get('quality')}/10; cutscene: {g.get('cutscene')}; "
             f"hook matches the video: {g.get('hook_matches')}. Combined quality {notes.get('claude_quality')} "
-            f"(transcript-based) + {g.get('quality')} (video) shown above.\n")
+            f"(transcript-based) + {g.get('quality')} (video) shown above.\n"
+            f"{(notes['tiebreak'] + '.' + chr(10)) if notes.get('tiebreak') else ''}"
+            f"{('The on-screen hook was rewritten from what Gemini saw (the first one, ' + repr(notes['hook_swapped'].get('from', '')) + ', did not match the video).' + chr(10)) if notes.get('hook_swapped') else ''}")
 
 
 def judge_clip(cfg: dict, clip: dict, notes: dict, ch: dict | None, camp: dict | None,
@@ -267,7 +271,12 @@ def judge_clip(cfg: dict, clip: dict, notes: dict, ch: dict | None, camp: dict |
 
 # ---------------------------------------------------------------- decision
 def decide(acfg: dict, gate_ok: bool, gate_reason: str, judge: dict | None, judge_err: str,
-           est: Estimate, quality: int, approved_today: int) -> Decision:
+           est: Estimate, quality: int, approved_today: int,
+           cold_start_min_quality: int | None = None) -> Decision:
+    """cold_start_min_quality: a lower bar for clips with real audience evidence (strong viewer clips)."""
+    cold_bar = int(acfg["cold_start_min_quality"])
+    if cold_start_min_quality is not None:
+        cold_bar = min(cold_bar, int(cold_start_min_quality))
     if not gate_ok:
         return Decision("hold", f"Needs a human: {gate_reason}")
     if judge is None:
@@ -283,11 +292,12 @@ def decide(acfg: dict, gate_ok: bool, gate_reason: str, judge: dict | None, judg
     if judge["decision"] == "approve":
         if not judge.get("brief_ok", True):
             return Decision("hold", f"{base} | held: brief not met")
-        if conf < int(acfg["min_confidence"]):
-            return Decision("hold", f"{base} | held: AI confidence below {acfg['min_confidence']}")
+        need = int(acfg.get("cold_start_min_confidence", acfg["min_confidence"]) if cold else acfg["min_confidence"])
+        if conf < need:
+            return Decision("hold", f"{base} | held: AI confidence below {need}")
         if cold:
-            if quality < int(acfg["cold_start_min_quality"]):
-                return Decision("hold", f"{base} | held: cold start needs quality >= {acfg['cold_start_min_quality']}")
+            if quality < cold_bar:
+                return Decision("hold", f"{base} | held: cold start needs quality >= {cold_bar}")
             cap = int(acfg["cold_start_max_per_day"])
         else:
             if est.pct < float(acfg["min_percentile"]):
@@ -344,7 +354,12 @@ def run_once(db: DB, cfg: dict, dry_run: bool = False) -> list[str]:
         gate_ok, gate_reason = guardrails.auto_gate(cfg, ch, clip, notes)
         est = estimate(history, clip, platform_views, cfg["posting"]["platforms"])
         judge, err = judge_clip(cfg, clip, notes, ch, camp, history, est) if gate_ok else (None, "")
-        d = decide(acfg, gate_ok, gate_reason, judge, err, est, int(clip.get("quality") or 0), approved_today)
+        from . import twitch_clips
+
+        viewer_bar = (cfg["twitch_clips"].get("cold_start_min_quality")
+                      if twitch_clips.evidence(cfg, clip) == "strong" else None)
+        d = decide(acfg, gate_ok, gate_reason, judge, err, est, int(clip.get("quality") or 0), approved_today,
+                   cold_start_min_quality=viewer_bar)
         lines.append(f"clip {clip['id']}: {d.action.upper()} - {d.note}")
         if dry_run:
             continue

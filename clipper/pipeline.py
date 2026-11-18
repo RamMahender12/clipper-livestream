@@ -58,7 +58,6 @@ def process_clip(db: DB, cfg: dict, clip: dict) -> None:
     if not src.exists():
         raise FileNotFoundError(f"source missing: {src}")
     start, dur = float(clip["start_s"] or 0), float(clip["duration_s"] or 30)
-    ccfg, capcfg = cfg["clip"], cfg["captions"]
 
     # 1. transcript (cached across re-renders)
     if clip["words_json"]:
@@ -96,7 +95,18 @@ def process_clip(db: DB, cfg: dict, clip: dict) -> None:
     else:
         hook = clip["hook"].strip()  # " " means a human cleared it on purpose
 
-    # 3. captions + render
+    # 3. captions + render, then Gemini watches the result
+    render_final(db, cfg, clip_id, ch, src, start, dur, words, hook)
+    gemini_review(db, cfg, clip_id)  # second opinion on the finished video
+    if not clip["hook"]:  # our own hook (never one you wrote): fix it if Gemini says it misleads
+        swap_hook(db, cfg, clip_id)
+    db.update("clips", clip_id, status="ready")
+    log.info("clip %s ready", clip_id)
+
+
+def render_final(db: DB, cfg: dict, clip_id: int, ch: dict, src: Path, start: float, dur: float,
+                 words: list, hook: str) -> Path:
+    ccfg, capcfg = cfg["clip"], cfg["captions"]
     out_dir = clips_dir(cfg) / f"{clip_id:05d}"
     out_dir.mkdir(parents=True, exist_ok=True)
     ass_path = None
@@ -125,9 +135,50 @@ def process_clip(db: DB, cfg: dict, clip: dict) -> None:
     except Exception:
         pass
     db.update("clips", clip_id, final_path=str(final), error="")
-    gemini_review(db, cfg, clip_id)  # second opinion on the finished video
-    db.update("clips", clip_id, status="ready")
-    log.info("clip %s ready: %s", clip_id, final)
+    return final
+
+
+def swap_hook(db: DB, cfg: dict, clip_id: int) -> bool:
+    """Gemini watched the clip and says the burned-in hook doesn't match what happens: burn in
+    the hook it wrote instead, re-render, and let it check again. Once per clip, so a second
+    mismatch still waits for you."""
+    if not cfg["gemini"].get("swap_hook", True):
+        return False
+    row = dict(db.one("SELECT * FROM clips WHERE id = ?", (clip_id,)))
+    try:
+        notes = json.loads(row.get("ai_notes") or "{}")
+    except json.JSONDecodeError:
+        return False
+    gem = notes.get("gemini") or {}
+    new = (gem.get("better_hook") or "").strip()
+    old = (row.get("hook") or "").strip()
+    if gem.get("hook_matches") is not False or not new or new.lower() == old.lower() or notes.get("hook_swapped"):
+        return False
+    if row.get("decided_by") == "human" or not row.get("source") or not Path(row["source"]).exists():
+        return False
+    ch = config_mod.channel(cfg, row["channel"]) or {"login": row["channel"]}
+    words = [captions.Word(**w) for w in json.loads(row.get("words_json") or "[]")]
+    first = Path(row["final_path"]) if row.get("final_path") else None
+    backup = first.with_name("final.first.mp4") if first and first.exists() else None
+    if backup:
+        first.replace(backup)
+    notes["hook_swapped"] = {"from": old, "to": new}
+    db.update("clips", clip_id, hook=new, ai_notes=json.dumps(notes))
+    try:
+        render_final(db, cfg, clip_id, ch, Path(row["source"]), float(row["start_s"] or 0),
+                     float(row["duration_s"] or 30), words, new)
+    except Exception as exc:  # keep the first render rather than losing the clip
+        log.warning("clip %s: re-render with Gemini's hook failed: %s", clip_id, exc)
+        if backup:
+            backup.replace(first)
+        notes.pop("hook_swapped")
+        db.update("clips", clip_id, hook=old, ai_notes=json.dumps(notes), final_path=row["final_path"])
+        return False
+    if backup:
+        backup.unlink(missing_ok=True)
+    gemini_review(db, cfg, clip_id)
+    log.info("clip %s: hook swapped to Gemini's %r (was %r)", clip_id, new, old)
+    return True
 
 
 def gemini_review(db: DB, cfg: dict, clip_id: int) -> bool:
@@ -163,13 +214,22 @@ def gemini_review(db: DB, cfg: dict, clip_id: int) -> bool:
     g = cfg["gemini"]
     final = gemini.combine(claude_q, claude_spoiler, claude_unsafe, gem,
                            weight=float(g.get("weight", 0.6)), disagree_points=int(g.get("disagree_points", 3)))
+    if final["disagree"] and cfg["twitch_clips"].get("tiebreak", True):
+        from . import twitch_clips
+
+        final = gemini.tiebreak(final, claude_q, gem["quality"], twitch_clips.evidence(cfg, row),
+                                twitch_clips.evidence_text(row))
     notes.update({"claude_quality": claude_q, "claude_spoiler": claude_spoiler, "claude_unsafe": claude_unsafe,
                   "gemini": gem, "disagree": final["disagree"], "unsafe": final["unsafe"]})
     notes.pop("gemini_error", None)
+    notes.pop("tiebreak", None)
+    if final.get("tiebreak"):
+        notes["tiebreak"] = final["tiebreak"]
     db.update("clips", clip_id, quality=final["quality"], spoiler_risk=final["spoiler"],
               ai_notes=json.dumps(notes))
     log.info("clip %s: Claude %s + Gemini %s -> %s (spoiler %s%s)", clip_id, claude_q, gem["quality"],
-             final["quality"], final["spoiler"], ", models disagree" if final["disagree"] else "")
+             final["quality"], final["spoiler"],
+             ", models disagree" if final["disagree"] else f", {final['tiebreak']}" if final.get("tiebreak") else "")
     return True
 
 

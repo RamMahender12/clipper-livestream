@@ -92,6 +92,8 @@ async function load(){
           ${c.expected_views?`<span class="pill">~${Number(c.expected_views).toLocaleString()} views expected</span>`:""}</div>
         ${c.decision_note?`<div class="decision">${esc(c.decision_note)}</div>`:""}
         ${c.source_note?`<div class="note">🎬 ${esc(c.source_note)}</div>`:""}
+        ${n.tiebreak?`<div class="note">⚖️ ${esc(n.tiebreak)}</div>`:""}
+        ${n.hook_swapped?`<div class="note">✏️ Hook rewritten by Gemini after watching (was: “${esc(n.hook_swapped.from)}”)</div>`:""}
         ${n.why?`<div class="note">${esc(n.why)}</div>`:""}
         ${n.gemini?`<div class="note"><b>Gemini watched it:</b> ${esc(n.gemini.what_happens)}${n.gemini.cutscene?" <b>(cutscene)</b>":""}${n.gemini.better_hook?`<br><b>Gemini hook idea:</b> ${esc(n.gemini.better_hook)}`:""}</div>`:""}
         ${n.gemini_error?`<div class="note">Gemini review failed: ${esc(n.gemini_error)}</div>`:""}

@@ -143,6 +143,8 @@ def caption_for(cfg: dict, clip: dict, kind: str) -> str:
     score = f"quality {clip.get('quality') or 0}/10"
     if gem:
         score += f" (Claude {notes.get('claude_quality')} · Gemini {gem.get('quality')})"
+        if notes.get("tiebreak"):
+            score += " · views broke the tie"
     lines = [f"#{clip['id']} {name} · {score} · spoiler {clip.get('spoiler_risk')}"]
     if camp:
         lines.append(camp.get("name", camp.get("id", "")))
@@ -152,6 +154,8 @@ def caption_for(cfg: dict, clip: dict, kind: str) -> str:
     if clip.get("source_note"):
         lines.append(clip["source_note"][:200])
     lines.append(f"Hook: {clip.get('hook', '').strip()}")
+    if notes.get("hook_swapped"):
+        lines.append(f"(Gemini's hook; Claude's \"{notes['hook_swapped'].get('from', '')}\" didn't match the video)")
     lines.append(f"Caption: {(clip.get('caption') or '').strip()[:350]}")
     if gem.get("what_happens"):
         lines.append(f"Gemini saw: {gem['what_happens'][:220]}")

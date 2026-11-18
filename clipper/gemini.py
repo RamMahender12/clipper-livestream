@@ -58,7 +58,7 @@ PROMPT = """You are reviewing a vertical short (about 30 seconds) cut from a liv
 - is_cutscene: true if the clip is mostly a non-interactive cinematic (letterbox bars, no game HUD, cinematic camera).
 - unsafe: true for slurs, harassment of a real person, sexual content, or anything against YouTube or Instagram community guidelines.
 - hook_matches: whether the on-screen hook text shown at the start matches what actually happens.
-- better_hook: a stronger hook of at most 7 words if the current one doesn't match or is weak, otherwise "".
+- better_hook: if the current hook doesn't match or is weak, a replacement of at most 7 words, otherwise "". It is burned into the video, so it must be true to what you saw and spoiler-free, but it has to make a scrolling viewer stop: tease the payoff, the stakes or the absurd part ("He did NOT expect the tiger", "Cops showed up for a parking ticket"). Never a flat description like "Riding around listening to music".
 - reason: one sentence explaining your score.
 
 Context: streamer {streamer}. On-screen hook: {hook!r}. Chat was spamming: {chat}. Transcript (auto-generated, may contain errors): {transcript!r}"""
@@ -348,3 +348,18 @@ def combine(claude_quality: int, claude_spoiler: str, claude_unsafe: bool, gem: 
         spoiler = "high"  # Rockstar takes down isolated cinematics
     return {"quality": quality, "spoiler": spoiler, "unsafe": claude_unsafe or gem["unsafe"],
             "disagree": disagree}
+
+
+def tiebreak(final: dict, claude_quality: int, gemini_quality: int, strength: str | None, why: str = "") -> dict:
+    """Settle a Claude/Gemini quality split with real audience evidence (Twitch viewer clip views).
+
+    strong views side with the higher score, weak ones with the lower; anything else stays a
+    disagreement for you. Only quality moves: spoiler and safety verdicts are never overruled.
+    """
+    if not final.get("disagree") or strength not in ("strong", "weak"):
+        return final
+    pick_high = strength == "strong"
+    side = "Gemini" if (gemini_quality >= claude_quality) == pick_high else "Claude"
+    quality = max(claude_quality, gemini_quality) if pick_high else min(claude_quality, gemini_quality)
+    return {**final, "quality": quality, "disagree": False,
+            "tiebreak": f"Twitch views broke the tie ({why}): went with {side}'s {quality}/10"}

@@ -89,6 +89,7 @@ DEFAULTS: dict = {
         "thinking_level": "low",
         "weight": 0.6,  # share of the final score from Gemini's visual score
         "disagree_points": 3,  # scores this far apart are held for you
+        "swap_hook": True,  # hook doesn't match the video: burn in Gemini's, re-render, re-check (once)
     },
     "review_bot": {
         "enabled": True,  # approve/reject clips from Telegram (needs TELEGRAM_REVIEW_* secrets)
@@ -105,6 +106,13 @@ DEFAULTS: dict = {
         "min_views": 10,  # ignore viewer clips with fewer views
         "dedupe_seconds": 30,  # skip if we already cut a clip within this many seconds
         "max_seconds": 60,
+        # Twitch views as evidence: a viewer clip is "strong" with this many views AND in the top
+        # share of what viewers clipped in the lookback window (ranked only if the window has min_pool)
+        "strong_min_views": 50,
+        "strong_top": 0.2,
+        "min_pool": 5,
+        "tiebreak": True,  # when Claude and Gemini disagree: strong -> higher score, bottom half -> lower
+        "cold_start_min_quality": 6,  # auto-approve bar for strong viewer clips before there's post history
     },
     "campaign_watch": {
         "enabled": True,  # Telegram alert when a new matching Content Rewards campaign appears
@@ -123,6 +131,7 @@ DEFAULTS: dict = {
         "min_percentile": 0.45,  # predicted to beat 45% of past posts
         "min_confidence": 7,  # Claude's confidence, 1-10
         "cold_start_min_quality": 8,  # stricter bar until there's history
+        "cold_start_min_confidence": 7,  # Claude's confidence needed until there's history
         "max_per_day": 20,
         "cold_start_max_per_day": 6,
         "auto_reject": True,

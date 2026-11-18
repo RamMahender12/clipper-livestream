@@ -72,9 +72,9 @@ class DecideTests(unittest.TestCase):
     judge = {"decision": "approve", "confidence": 8, "predicted_percentile": 70,
              "brief_ok": True, "issues": "", "reason": "great moment"}
 
-    def d(self, judge=None, est=None, quality=9, today=0, gate=(True, "ok"), err=""):
+    def d(self, judge=None, est=None, quality=9, today=0, gate=(True, "ok"), err="", bar=None):
         return autoapprove.decide(AUTO, gate[0], gate[1], judge, err,
-                                  est or Estimate(pct=0.5, n=0), quality, today)
+                                  est or Estimate(pct=0.5, n=0), quality, today, cold_start_min_quality=bar)
 
     def test_gate_failure_holds(self):
         self.assertEqual(self.d(self.judge, gate=(False, "spoiler risk is high")).action, "hold")
@@ -86,6 +86,25 @@ class DecideTests(unittest.TestCase):
         self.assertEqual(self.d(self.judge, quality=9).action, "approve")
         self.assertEqual(self.d(self.judge, quality=6).action, "hold")
         self.assertEqual(self.d(self.judge, quality=9, today=AUTO["cold_start_max_per_day"]).action, "hold")
+
+    def test_cold_start_confidence_is_its_own_setting(self):
+        loose = dict(AUTO, cold_start_min_quality=6, cold_start_min_confidence=6)
+        sure6 = dict(self.judge, confidence=6)
+        cold = Estimate(pct=0.5, n=0)
+        warm = Estimate(pct=0.7, n=50, expected_views=5000)
+        self.assertEqual(autoapprove.decide(loose, True, "ok", sure6, "", cold, 6, 0).action, "approve")
+        self.assertEqual(autoapprove.decide(loose, True, "ok", sure6, "", cold, 5, 0).action, "hold")
+        self.assertEqual(autoapprove.decide(loose, True, "ok", dict(self.judge, confidence=5), "", cold, 6, 0).action,
+                         "hold")
+        held = autoapprove.decide(loose, True, "ok", sure6, "", warm, 6, 0)  # history phase keeps min_confidence 7
+        self.assertEqual(held.action, "hold")
+        self.assertIn("confidence below 7", held.note)
+
+    def test_viewer_backed_cold_start_bar(self):
+        self.assertEqual(self.d(self.judge, quality=6, bar=6).action, "approve")
+        self.assertEqual(self.d(self.judge, quality=5, bar=6).action, "hold")
+        self.assertEqual(self.d(self.judge, quality=9, bar=10).action, "approve")  # never stricter
+        self.assertEqual(self.d(dict(self.judge, confidence=5), quality=6, bar=6).action, "hold")
 
     def test_warm_uses_history(self):
         good = Estimate(pct=0.7, n=50, expected_views=5000)

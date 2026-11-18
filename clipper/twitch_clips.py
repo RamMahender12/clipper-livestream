@@ -107,6 +107,35 @@ def score_for(views: int) -> float:
     return round(4 + 3 * math.log10(max(views, 1)), 2)
 
 
+def rank_in(views: int, pool: list[int], min_pool: int = 5) -> tuple[int, float | None]:
+    """(rank, share of the other clips it out-viewed). Share is None when the pool is too small."""
+    rank = 1 + sum(1 for v in pool if v > views)
+    if len(pool) < max(min_pool, 2):
+        return rank, None
+    return rank, round(sum(1 for v in pool if v < views) / (len(pool) - 1), 3)
+
+
+def evidence(cfg: dict, clip: dict) -> str | None:
+    """What Twitch viewers' reaction says about this clip: 'strong', 'weak', 'neutral', or None
+    for clips we found ourselves."""
+    views = int(clip.get("source_views") or 0)
+    if not views:
+        return None
+    t = cfg["twitch_clips"]
+    pct = clip.get("source_pct")
+    if pct is None:
+        return "neutral"
+    if views >= int(t.get("strong_min_views", 50)) and pct >= 1 - float(t.get("strong_top", 0.2)):
+        return "strong"
+    return "weak" if pct < 0.5 else "neutral"
+
+
+def evidence_text(clip: dict) -> str:
+    pct = clip.get("source_pct")
+    top = f", top {max(1, round((1 - pct) * 100))}% of recent viewer clips" if pct is not None else ""
+    return f"{int(clip.get('source_views') or 0):,} views on Twitch{top}"
+
+
 def _blocking(db: DB, clip_id: int | None) -> bool:
     """Does our overlapping clip still stand in the viewer clip's way?
 
@@ -146,6 +175,8 @@ def harvest_once(db: DB, cfg: dict, helix: Helix | None = None, fetch=download) 
             lines.append(f"{login}: Twitch API error: {exc}")
             continue
         picked = 0
+        pool = [int(x.get("view_count", 0)) for x in clips]
+        hours = float(tcfg.get("lookback_hours", 3))
         for c in clips:
             if picked >= int(tcfg.get("per_poll", 3)) or c.get("view_count", 0) < int(tcfg.get("min_views", 10)):
                 break
@@ -180,9 +211,12 @@ def harvest_once(db: DB, cfg: dict, helix: Helix | None = None, fetch=download) 
             clip_id = pipeline.queue_clip(db, cfg, channel=login, source=path, start_s=0.0,
                                           duration_s=min(duration, float(tcfg.get("max_seconds", 60))),
                                           score=score_for(c.get("view_count", 0)), wall_start=start_wall)
+            views = int(c.get("view_count", 0))
+            rank, pct = rank_in(views, pool, int(tcfg.get("min_pool", 5)))
             note = (f"Twitch viewers clipped this moment and titled it \"{c.get('title', '').strip()}\" "
-                    f"({c.get('view_count', 0)} views on Twitch).")
-            db.update("clips", clip_id, source_note=note[:300])
+                    f"({views:,} views on Twitch; #{rank} of the {len(pool)} clips viewers made "
+                    f"in the last {hours:g}h).")
+            db.update("clips", clip_id, source_note=note[:300], source_views=views, source_pct=pct)
             seen("queued", clip_id)
             picked += 1
             lines.append(f"{login}: queued clip #{clip_id} from viewer clip '{c.get('title', '')}' "

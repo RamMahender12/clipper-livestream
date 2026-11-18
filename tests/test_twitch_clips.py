@@ -60,6 +60,8 @@ class HarvestTests(unittest.TestCase):
         rows = [dict(r) for r in self.db.query("SELECT * FROM clips ORDER BY id")]
         self.assertEqual(len(rows), 2)
         self.assertIn('"LACY gets bitten" (500 views', rows[0]["source_note"])
+        self.assertIn("#1 of the 4 clips", rows[0]["source_note"])
+        self.assertEqual((rows[0]["source_views"], rows[0]["source_pct"]), (500, None))  # 4 < min_pool
         self.assertGreater(rows[0]["score"], rows[1]["score"])
         self.assertEqual(rows[0]["campaign_id"], "lacy-gta")
         self.assertTrue(any("queued clip" in l for l in lines))
@@ -103,6 +105,25 @@ class HarvestTests(unittest.TestCase):
         tc.harvest_once(self.db, self.cfg, helix, fetch=self.fetch)
         self.assertEqual(self.fetched, ["v"])  # not twice
         self.assertIsNotNone(human)
+
+
+class EvidenceTests(unittest.TestCase):
+    cfg = config_mod._merge(config_mod.DEFAULTS, {})
+
+    def test_rank_and_strength(self):
+        pool = [1616, 785, 620, 606, 466, 300, 120, 80, 40, 12]
+        self.assertEqual(tc.rank_in(1616, pool), (1, 1.0))
+        self.assertEqual(tc.rank_in(466, pool), (5, 0.556))
+        self.assertEqual(tc.rank_in(50, [50, 10]), (1, None))  # too few to rank
+        ev = lambda views, pct: tc.evidence(self.cfg, {"source_views": views, "source_pct": pct})
+        self.assertEqual(ev(1616, 1.0), "strong")
+        self.assertEqual(ev(40, 1.0), "neutral")  # top of a quiet window, but few views
+        self.assertEqual(ev(466, 0.556), "neutral")
+        self.assertEqual(ev(80, 0.2), "weak")
+        self.assertEqual(ev(500, None), "neutral")
+        self.assertIsNone(tc.evidence(self.cfg, {"source_views": 0}))  # our own chat-spike clip
+        self.assertEqual(tc.evidence_text({"source_views": 1616, "source_pct": 0.97}),
+                         "1,616 views on Twitch, top 3% of recent viewer clips")
 
 
 if __name__ == "__main__":
