@@ -73,9 +73,13 @@ def post_once(db: DB, cfg: dict) -> list[str]:
                 clip_id=clip["id"],
             )
             result = pub.publish(Path(clip["final_path"]), meta)
+            # the channel's current campaign: a clip cut before joining still counts
+            campaign_id = (camp or {}).get("id", "") or clip["campaign_id"] or ""
+            if campaign_id and campaign_id != clip["campaign_id"]:
+                db.update("clips", clip["id"], campaign_id=campaign_id)
             db.insert(
                 "posts", clip_id=clip["id"], platform=platform, account=account,
-                campaign_id=clip["campaign_id"] or "", remote_id=result.remote_id,
+                campaign_id=campaign_id, remote_id=result.remote_id,
                 url=result.url, status=result.status if result.ok else "error",
                 error=result.error[:500], posted_at=time.time(),
             )

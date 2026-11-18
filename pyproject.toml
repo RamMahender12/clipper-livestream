@@ -5,6 +5,9 @@ description = "Live Twitch clipper + review queue + official-API publisher for p
 requires-python = ">=3.11"
 dependencies = ["anthropic>=2.0"]
 
+[project.optional-dependencies]
+assets = ["pillow"]  # assets/make_profile_pics.py
+
 [project.scripts]
 clipper = "clipper.__main__:main"
 

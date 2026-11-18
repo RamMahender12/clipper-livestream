@@ -9,3 +9,4 @@ config.toml
 *.egg-info/
 build/
 deploy/.env
+assets/profile/*_circle_preview.png

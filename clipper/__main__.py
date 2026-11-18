@@ -14,6 +14,7 @@
   clipper auth youtube --channel LOGIN   link a streamer's YouTube channel (one-time)
   clipper instagram-accounts   list Instagram Business account IDs for the token
   clipper telegram setup|test  connect and test phone alerts
+  clipper campaigns            check for new GTA 6 campaigns now (Telegram alert)
   clipper service install|status|restart|stop|start|uninstall
                                run unattended in the background (macOS launchd)
 """
@@ -205,6 +206,15 @@ def cmd_run(args, cfg, review_only: bool = False) -> int:
         pipeline.RenderWorker(db, cfg, stop, i).start()
     if not review_only and not args.no_post:
         scheduler.Scheduler(db, cfg, stop).start()
+    if not review_only and cfg["campaign_watch"].get("enabled"):
+        from . import notify
+        from .campaign_watch import CampaignWatcher
+
+        if notify.configured():
+            CampaignWatcher(db, cfg, stop).start()
+            log.info("campaign alerts ON (every %s min)", cfg["campaign_watch"]["interval_minutes"])
+        else:
+            log.info("campaign alerts off: Telegram is not set up")
     if not review_only and cfg["auto_approve"].get("enabled"):
         from .autoapprove import AutoApprover
 
@@ -318,6 +328,15 @@ def cmd_service(args, cfg) -> int:
           f"{', pid ' + st['pid'] if st['pid'] else ''}"
           f"{', last exit ' + st['last_exit'] if st['last_exit'] else ''}")
     print(f"logs: {st['log']}  and  {config_mod.data_dir(cfg) / 'clipper.log'}")
+    return 0
+
+
+def cmd_campaigns(args, cfg) -> int:
+    """Check Content Rewards for new campaigns now (alerts go to Telegram)."""
+    from . import campaign_watch
+
+    for line in campaign_watch.run_once(open_db(cfg), cfg) or ["no new campaigns since the last check"]:
+        print(line)
     return 0
 
 
@@ -493,6 +512,7 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("stats")
     s.add_argument("--refresh", action="store_true")
     sub.add_parser("launch-times")
+    sub.add_parser("campaigns", help="check for new Content Rewards campaigns now")
     sv = sub.add_parser("service")
     sv.add_argument("action", choices=["install", "status", "start", "stop", "restart", "uninstall"])
     a = sub.add_parser("auth")
@@ -517,6 +537,7 @@ def main(argv: list[str] | None = None) -> int:
         "cut": cmd_cut, "post": cmd_post, "stats": cmd_stats, "launch-times": cmd_launch_times,
         "auth": cmd_auth, "autoreview": cmd_autoreview, "service": cmd_service,
         "instagram-accounts": cmd_instagram_accounts, "telegram": cmd_telegram,
+        "campaigns": cmd_campaigns,
     }
     if args.cmd == "review":
         args.no_watch = args.no_post = True

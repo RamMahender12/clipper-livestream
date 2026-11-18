@@ -78,6 +78,14 @@ DEFAULTS: dict = {
         "earliest_footage": "2026-11-18T11:00:00+00:00",
     },
     "stats": {"refresh_minutes": 120},
+    "campaign_watch": {
+        "enabled": True,  # Telegram alert when a new matching Content Rewards campaign appears
+        "interval_minutes": 20,
+        "keywords": ["gta", "grand theft auto"],
+        "platforms_any": ["youtube", "instagram"],  # skip campaigns that pay only on TikTok/X
+        "max_pages_per_run": 15,
+        "page_delay_seconds": 2,
+    },
     "auto_approve": {
         "enabled": False,
         "interval_minutes": 3,
