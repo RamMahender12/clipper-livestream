@@ -1,0 +1,151 @@
+"""Config loading. Settings live in config.toml (copy config.example.toml).
+
+Secrets never go in config.toml: tokens come from environment variables or
+files under secrets/ (both git-ignored).
+"""
+from __future__ import annotations
+
+import copy
+import tomllib
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+
+DEFAULTS: dict = {
+    "paths": {
+        "data_dir": "data",
+        "whisper_model": "models/ggml-base.en.bin",
+    },
+    "record": {
+        "quality": "1080p60,1080p,720p60,best",
+        "segment_seconds": 30,
+        "retain_minutes": 90,
+        "poll_seconds": 60,
+    },
+    "detect": {
+        "window_seconds": 10,
+        "baseline_windows": 30,
+        "warmup_windows": 6,
+        "min_ratio": 2.5,
+        "min_z": 3.0,
+        "min_messages": 12,
+        "clip_mentions": 3,
+        "cooldown_seconds": 45,
+        "keywords": [
+            "kekw", "lul", "lol", "lmao", "lmfao", "omegalul", "icant", "wtf",
+            "no way", "noway", "pog", "poggers", "insane", "holy", "???", "bro",
+            "w", "wow", "omg", "dead", "clip",
+        ],
+    },
+    "clip": {
+        "pre_seconds": 22,
+        "post_seconds": 8,
+        "chat_delay_seconds": 6,
+        "layout": "blur",  # blur | facecam_split | crop
+        "zoom": 1.35,  # blur layout: >1 crops the sides so gameplay fills more of the frame
+        "width": 1080,
+        "height": 1920,
+        "fps": 60,
+        "encoder": "libx264",  # libx264 | h264_videotoolbox
+        "max_per_hour_per_channel": 12,
+        "render_workers": 1,
+    },
+    "captions": {
+        "enabled": True,
+        "words_per_chunk": 3,
+        "font": "Arial Black",
+        "font_size": 84,
+        "highlight_color": "&H0000E5FF",  # ASS BGR: yellow
+        "hook_seconds": 3.0,
+    },
+    "ai": {
+        "enabled": True,
+        "model": "claude-opus-5-5",
+        "effort": "medium",
+        "page_handle": "@yourpage",
+        "niche": "GTA 6 launch-week clips",
+        "voice": "short, punchy, funny, never mean; no spoilers",
+    },
+    "review": {"host": "127.0.0.1", "port": 8765},
+    "posting": {
+        "platforms": ["export"],
+        "min_gap_minutes": 45,
+        "max_posts_per_day": {"youtube": 10, "instagram": 8, "tiktok": 5, "export": 1000},
+        "quiet_hours": [],  # e.g. [2, 3, 4, 5] local hours with no posting
+        "timezone": "Asia/Kolkata",
+    },
+    "stats": {"refresh_minutes": 120},
+    "youtube": {
+        "client_secrets_file": "secrets/youtube_client_secret.json",
+        "token_file": "secrets/youtube_token.json",
+        "privacy": "public",
+        "category_id": "20",
+    },
+    "instagram": {
+        "ig_user_id": "",
+        "access_token_env": "IG_ACCESS_TOKEN",
+        "graph_version": "v27.0",
+        "share_to_feed": True,
+    },
+    "tiktok": {
+        "client_key_env": "TIKTOK_CLIENT_KEY",
+        "client_secret_env": "TIKTOK_CLIENT_SECRET",
+        "token_file": "secrets/tiktok_token.json",
+        "mode": "inbox",  # inbox = lands in TikTok drafts; direct needs an audited app
+    },
+    "campaigns": [],
+    "channels": [],
+}
+
+
+def _merge(base: dict, override: dict) -> dict:
+    out = copy.deepcopy(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = _merge(out[key], value)
+        else:
+            out[key] = value
+    return out
+
+
+def load(path: str | Path | None = None) -> dict:
+    path = Path(path) if path else ROOT / "config.toml"
+    if not path.exists():
+        example = ROOT / "config.example.toml"
+        raise SystemExit(
+            f"No config at {path}. Copy {example.name} to config.toml and edit it."
+        )
+    with open(path, "rb") as fh:
+        user = tomllib.load(fh)
+    cfg = _merge(DEFAULTS, user)
+    cfg["_path"] = str(path)
+    return cfg
+
+
+def data_dir(cfg: dict) -> Path:
+    p = Path(cfg["paths"]["data_dir"])
+    if not p.is_absolute():
+        p = ROOT / p
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def resolve(cfg: dict, rel: str) -> Path:
+    p = Path(rel)
+    return p if p.is_absolute() else ROOT / p
+
+
+def campaign(cfg: dict, campaign_id: str | None) -> dict | None:
+    if not campaign_id:
+        return None
+    for c in cfg.get("campaigns", []):
+        if c.get("id") == campaign_id:
+            return c
+    return None
+
+
+def channel(cfg: dict, login: str) -> dict | None:
+    for ch in cfg.get("channels", []):
+        if ch.get("login", "").lower() == login.lower():
+            return ch
+    return None

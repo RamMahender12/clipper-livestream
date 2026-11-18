@@ -1,0 +1,16 @@
+[project]
+name = "gta6-clipper"
+version = "0.1.0"
+description = "Live Twitch clipper + review queue + official-API publisher for permissioned GTA 6 clipping"
+requires-python = ">=3.11"
+dependencies = ["anthropic>=2.0"]
+
+[project.scripts]
+clipper = "clipper.__main__:main"
+
+[tool.setuptools]
+packages = ["clipper", "clipper.publishers"]
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"

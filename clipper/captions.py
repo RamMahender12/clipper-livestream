@@ -1,0 +1,166 @@
+"""Word-level captions with whisper.cpp, rendered as an ASS subtitle file.
+
+The ASS file also carries the on-screen hook (first few seconds) and the
+credit line, so one libass pass burns all text into the video.
+"""
+from __future__ import annotations
+
+import json
+import re
+import tempfile
+from dataclasses import dataclass
+from pathlib import Path
+
+from . import tools
+
+_NOISE = re.compile(r"^\s*[\[\(].*[\]\)]\s*$")  # [Music], (laughs)
+
+
+@dataclass
+class Word:
+    start: float
+    end: float
+    text: str
+
+
+def transcribe(media: Path, model: Path, start: float = 0.0, duration: float | None = None) -> list[Word]:
+    """Transcribe [start, start+duration] of `media`; word times are relative to `start`."""
+    with tempfile.TemporaryDirectory() as tmp:
+        wav = Path(tmp) / "a.wav"
+        cmd = [tools.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", "-ss", f"{start:.3f}"]
+        if duration:
+            cmd += ["-t", f"{duration:.3f}"]
+        cmd += ["-i", str(media), "-vn", "-ac", "1", "-ar", "16000", str(wav)]
+        tools.run(cmd, timeout=120)
+        base = Path(tmp) / "out"
+        wcmd = [
+            tools.whisper_cli(), "-m", str(model), "-f", str(wav),
+            "-ml", "1", "-sow", "-oj", "-of", str(base), "-np", "-nt",
+        ]
+        dtw = _dtw_preset(model)
+        if dtw:
+            wcmd += ["-dtw", dtw]
+        tools.run(wcmd, timeout=600)
+        data = json.loads((base.with_suffix(".json")).read_text(encoding="utf-8", errors="replace"))
+    return words_from_whisper(data)
+
+
+def _dtw_preset(model: Path) -> str | None:
+    m = re.search(r"ggml-(tiny|base|small|medium|large-v3-turbo|large-v3|large-v2|large-v1)(\.en)?\.bin$", model.name)
+    return f"{m.group(1)}{m.group(2) or ''}" if m else None
+
+
+def words_from_whisper(data: dict) -> list[Word]:
+    words: list[Word] = []
+    for seg in data.get("transcription", []):
+        text = (seg.get("text") or "").strip()
+        if not text or _NOISE.match(text):
+            continue
+        off = seg.get("offsets") or {}
+        start, end = off.get("from", 0) / 1000.0, off.get("to", 0) / 1000.0
+        if words and not text[0].isalnum() and len(text) <= 2:
+            words[-1].text += text  # stray punctuation token
+            words[-1].end = max(words[-1].end, end)
+            continue
+        words.append(Word(start, max(end, start + 0.05), text))
+    return words
+
+
+def transcript_text(words: list[Word]) -> str:
+    return " ".join(w.text for w in words).strip()
+
+
+def chunk_words(words: list[Word], per_chunk: int = 3, max_gap: float = 0.7) -> list[list[Word]]:
+    chunks: list[list[Word]] = []
+    cur: list[Word] = []
+    for w in words:
+        if cur and (len(cur) >= per_chunk or w.start - cur[-1].end > max_gap):
+            chunks.append(cur)
+            cur = []
+        cur.append(w)
+        if w.text[-1:] in ".?!":
+            chunks.append(cur)
+            cur = []
+    if cur:
+        chunks.append(cur)
+    return chunks
+
+
+def _ts(sec: float) -> str:
+    sec = max(0.0, sec)
+    cs = int(round(sec * 100))
+    h, cs = divmod(cs, 360000)
+    m, cs = divmod(cs, 6000)
+    s, cs = divmod(cs, 100)
+    return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
+
+
+def _clean(text: str) -> str:
+    return text.replace("\\", "/").replace("{", "(").replace("}", ")").replace("\n", " ")
+
+
+def build_ass(
+    words: list[Word],
+    *,
+    width: int = 1080,
+    height: int = 1920,
+    font: str = "Arial Black",
+    font_size: int = 84,
+    highlight: str = "&H0000E5FF",
+    per_chunk: int = 3,
+    hook: str = "",
+    hook_seconds: float = 3.0,
+    credit: str = "",
+    duration: float = 60.0,
+    shift: float = 0.0,
+) -> str:
+    """`shift` moves every word time (use when the video was trimmed after transcription)."""
+    cap_margin = int(height * 0.245)
+    lines = [
+        "[Script Info]",
+        "ScriptType: v4.00+",
+        f"PlayResX: {width}",
+        f"PlayResY: {height}",
+        "WrapStyle: 0",
+        "ScaledBorderAndShadow: yes",
+        "",
+        "[V4+ Styles]",
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, "
+        "Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, "
+        "Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
+        f"Style: Cap,{font},{font_size},&H00FFFFFF,&H00FFFFFF,&H00000000,&H96000000,"
+        f"-1,0,0,0,100,100,0,0,1,7,3,2,60,60,{cap_margin},1",
+        f"Style: Hook,{font},{int(font_size * 0.95)},&H00000000,&H00000000,&H00FFFFFF,&H00FFFFFF,"
+        f"-1,0,0,0,100,100,0,0,3,18,0,8,70,70,{int(height * 0.12)},1",
+        f"Style: Credit,Arial,{int(font_size * 0.45)},&H40FFFFFF,&H40FFFFFF,&H80000000,&H00000000,"
+        f"-1,0,0,0,100,100,0,0,1,3,0,8,40,40,{int(height * 0.05)},1",
+        "",
+        "[Events]",
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+    ]
+    if credit:
+        lines.append(f"Dialogue: 2,{_ts(0)},{_ts(duration)},Credit,,0,0,0,,{_clean(credit)}")
+    if hook:
+        lines.append(
+            f"Dialogue: 3,{_ts(0)},{_ts(hook_seconds)},Hook,,0,0,0,,{{\\fad(0,250)}}{_clean(hook.upper())}"
+        )
+    chunks = chunk_words(words, per_chunk)
+    for ci, chunk in enumerate(chunks):
+        chunk_end = chunk[-1].end
+        if ci + 1 < len(chunks) and chunks[ci + 1][0].start - chunk_end < 0.4:
+            chunk_end = chunks[ci + 1][0].start
+        for wi, w in enumerate(chunk):
+            start = w.start
+            end = chunk[wi + 1].start if wi + 1 < len(chunk) else chunk_end
+            start, end = start + shift, end + shift
+            if end <= 0 or start >= duration:
+                continue
+            parts = []
+            for wj, other in enumerate(chunk):
+                t = _clean(other.text.upper())
+                parts.append(f"{{\\c{highlight}}}{t}{{\\c&H00FFFFFF}}" if wj == wi else t)
+            pop = "{\\fscx108\\fscy108\\t(0,80,\\fscx100\\fscy100)}" if wi == 0 else ""
+            lines.append(
+                f"Dialogue: 1,{_ts(start)},{_ts(min(end, duration))},Cap,,0,0,0,,{pop}{' '.join(parts)}"
+            )
+    return "\n".join(lines) + "\n"

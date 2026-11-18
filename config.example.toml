@@ -1,0 +1,104 @@
+# Copy to config.toml (`clipper init`) and edit. Secrets never go here.
+
+[paths]
+data_dir = "data"
+whisper_model = "models/ggml-base.en.bin"   # bigger = better captions: ggml-small.en.bin
+
+[record]
+quality = "1080p60,1080p,720p60,best"
+segment_seconds = 30
+retain_minutes = 90        # raw stream segments older than this are deleted
+poll_seconds = 60          # how often to check whether a channel went live
+
+[detect]                   # chat-spike detection
+window_seconds = 10
+baseline_windows = 30      # 5 min of history defines "normal" chat speed
+min_ratio = 2.5            # spike = 2.5x the median window...
+min_z = 3.0                # ...or 3 standard deviations above the mean
+min_messages = 12          # ignore tiny chats
+clip_mentions = 3          # 3+ people typing "clip it" in one window also counts
+cooldown_seconds = 45
+
+[clip]
+pre_seconds = 20           # seconds kept before the moment chat reacted to
+post_seconds = 10
+chat_delay_seconds = 3     # chat reacts this many seconds after the moment
+layout = "blur"            # blur | facecam_split | crop (channels can override)
+zoom = 1.35                # blur layout: >1 crops the sides so gameplay fills more of the frame
+fps = 60
+encoder = "libx264"        # h264_videotoolbox renders ~3x faster on a Mac
+max_per_hour_per_channel = 12
+render_workers = 1
+
+[captions]
+enabled = true
+words_per_chunk = 3
+font = "Arial Black"
+font_size = 84
+hook_seconds = 3.0
+
+[ai]                       # needs ANTHROPIC_API_KEY in the environment; templates otherwise
+enabled = true
+model = "claude-opus-5-5"
+effort = "medium"
+page_handle = "@yourpage"
+niche = "GTA 6 launch-week clips"
+voice = "short, punchy, funny, never mean; no spoilers"
+
+[review]
+host = "127.0.0.1"
+port = 8765
+
+[posting]
+# export = write mp4 + caption .txt to data/export/ for posting from your phone (safest start).
+# youtube / instagram / tiktok = official APIs (see README for one-time setup).
+platforms = ["export"]
+min_gap_minutes = 45
+quiet_hours = []           # local hours with no posting, e.g. [3, 4, 5]
+timezone = "Asia/Kolkata"
+
+[posting.max_posts_per_day]
+youtube = 10
+instagram = 8
+tiktok = 5                 # TikTok allows ~5 pending inbox drafts per 24h
+export = 1000
+
+# ---------------------------------------------------------------------------
+# Campaigns: paid clipping programs you've joined (Whop Content Rewards etc.).
+# Copy the numbers from the campaign brief. Only clips of channels linked to a
+# campaign earn money, and only on the platforms the campaign lists.
+# ---------------------------------------------------------------------------
+[[campaigns]]
+id = "example-streamer"
+name = "EXAMPLE - replace with a real campaign you joined"
+url = "https://whop.com/discover/"
+active = false
+rate_per_1k = 1.00          # USD per 1,000 views
+cap_per_clip = 150          # max payout for one clip
+min_views = 1000            # views needed before a clip pays at all
+platforms = ["tiktok", "instagram", "youtube"]
+required_tags = ["#ad"]
+disclosure = "#ad"          # paid campaigns are ads: disclose them
+paid_promotion = true
+notes = "Paste brief rules here: facecam visible, handle on screen, no radio music, etc."
+
+# ---------------------------------------------------------------------------
+# Channels: who to record. permission is REQUIRED:
+#   "campaign:<campaign id>"  the streamer pays clippers via that campaign
+#   "written:<link>"          the streamer told you in writing you may clip & post
+#   "own"                     your own gameplay/stream
+#   "test"                    record + render locally only, never posted
+# ---------------------------------------------------------------------------
+[[channels]]
+login = "xqc"
+display_name = "xQc"
+credit = "twitch.tv/xqc"
+permission = "test"
+# categories = ["Grand Theft Auto VI"]   # only record while streaming this game
+# layout = "facecam_split"
+# facecam = [0.0, 0.0, 0.22, 0.30]       # x, y, w, h as fractions of the frame
+
+# [[channels]]
+# login = "your_twitch_login"
+# credit = "twitch.tv/your_twitch_login"
+# permission = "own"
