@@ -76,6 +76,17 @@ CREATE INDEX IF NOT EXISTS clips_status ON clips(status);
 CREATE INDEX IF NOT EXISTS posts_platform ON posts(platform, posted_at);
 """
 
+# Columns added after the first release; applied to old and new databases alike.
+MIGRATIONS: dict[str, list[tuple[str, str]]] = {
+    "clips": [
+        ("decided_by", "TEXT DEFAULT ''"),  # '' | 'human' | 'auto'
+        ("decision_note", "TEXT DEFAULT ''"),
+        ("decided_at", "REAL"),
+        ("auto_checked_at", "REAL"),
+        ("expected_views", "INTEGER DEFAULT 0"),
+    ],
+}
+
 # Clip lifecycle: queued -> rendering -> ready -> approved -> posted
 #                                       \-> rejected      \-> failed
 CLIP_STATUSES = ("queued", "rendering", "ready", "approved", "posted", "rejected", "failed")
@@ -89,6 +100,11 @@ class DB:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.executescript(SCHEMA)
+        for table, columns in MIGRATIONS.items():
+            have = {r[1] for r in self.conn.execute(f"PRAGMA table_info({table})")}
+            for name, decl in columns:
+                if name not in have:
+                    self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
         self.conn.commit()
 
     def execute(self, sql: str, params: tuple | dict = ()) -> sqlite3.Cursor:

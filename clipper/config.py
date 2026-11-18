@@ -75,6 +75,24 @@ DEFAULTS: dict = {
         "timezone": "Asia/Kolkata",
     },
     "stats": {"refresh_minutes": 120},
+    "auto_approve": {
+        "enabled": False,
+        "interval_minutes": 3,
+        "batch": 10,  # clips reviewed per pass
+        "min_history": 15,  # posts with view data before the stats model counts
+        "mature_hours": 24,  # a post's views count once it's this old
+        "min_percentile": 0.45,  # predicted to beat 45% of past posts
+        "min_confidence": 7,  # Claude's confidence, 1-10
+        "cold_start_min_quality": 8,  # stricter bar until there's history
+        "max_per_day": 20,
+        "cold_start_max_per_day": 6,
+        "auto_reject": True,
+        "expire_hours": 12,  # unposted ready clips older than this are dropped
+        "allow_spoiler_low": False,
+        "veto_minutes": 10,  # auto-approved clips wait this long before posting
+        "effort": "high",
+        "examples": 6,  # best/worst past posts shown to Claude
+    },
     "youtube": {
         "client_secrets_file": "secrets/youtube_client_secret.json",
         "token_file": "secrets/youtube_token.json",

@@ -45,6 +45,25 @@ page_handle = "@yourpage"
 niche = "GTA 6 launch-week clips"
 voice = "short, punchy, funny, never mean; no spoilers"
 
+[auto_approve]
+# The AI approves clips on its own, using your past posts' views plus a Claude
+# review of each clip. Needs ANTHROPIC_API_KEY; without it every clip waits for you.
+# Never auto-approved, whatever these settings say: test footage, spoiler or
+# unsafe flags, clips without an AI spoiler check, channels without permission.
+enabled = true
+min_history = 15           # posts with view data before your stats are trusted
+mature_hours = 24          # a post's views count once it's this old
+min_percentile = 0.45      # history must predict the clip beats 45% of your past posts
+min_confidence = 7         # Claude's confidence (1-10)
+cold_start_min_quality = 8 # stricter bar until there's history
+max_per_day = 20
+cold_start_max_per_day = 6
+auto_reject = true         # also drop clips both the AI and history call weak
+expire_hours = 12          # unposted clips older than this are dropped (launch news goes stale)
+allow_spoiler_low = false
+veto_minutes = 10          # auto-approved clips wait this long so you can undo them
+effort = "high"            # Claude effort for the approval review
+
 [review]
 host = "127.0.0.1"
 port = 8765

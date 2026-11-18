@@ -1,12 +1,12 @@
 # GTA 6 live clipper
 
-Records Twitch streams you're allowed to clip, watches chat, cuts every moment chat explodes into a captioned vertical short, writes the hook and caption with Claude, and posts what you approve through official platform APIs.
+Records Twitch streams you're allowed to clip, watches chat, cuts every moment chat explodes into a captioned vertical short, writes the hook and caption with Claude, and posts the clips that you (or the AI auto-approver) approve through official platform APIs.
 
 Strategy, money math, legal rules and the launch-night timeline are in **[PLAYBOOK.md](PLAYBOOK.md)**.
 
 ```
 streamlink ──► 30 s segments on disk (UTC-named)            ┌──────────────┐
-                                    ▲                       │ review UI    │  you approve
+                                    ▲                       │ review UI    │  you or AI approve
 Twitch chat (anonymous, read-only)  │ cut [t-20s, t+10s]    │ 127.0.0.1    │──────────────┐
    └► 10 s windows ► spike? ────────┘                       └──────▲───────┘              ▼
                                        whisper.cpp captions        │              scheduler (paced)
@@ -50,6 +50,25 @@ export ANTHROPIC_API_KEY=sk-ant-...
 
 Then open http://127.0.0.1:8765. Clips appear under **ready** about a minute after a spike. Edit the hook (Save + re-render burns the new one in), fix the caption, then **Approve**. The scheduler posts approved clips to each platform in `[posting].platforms`, one at a time, respecting the daily caps and minimum gap.
 
+## Auto-approve
+
+With `[auto_approve] enabled = true` and `ANTHROPIC_API_KEY` set, the AI approves clips for you every few minutes. Each ready clip gets two opinions:
+
+1. **Your track record.** Every post older than `mature_hours` with known views is ranked against your other posts on the same platform. A new clip's expected rank comes from how past clips did with the same streamer, the same AI quality score and a similar chat-spike strength. A factor needs about 5 past clips before it moves the estimate much, so one lucky viral clip doesn't skew it. The card shows the result as "~N views expected".
+2. **A Claude review.** Claude sees the clip, the campaign brief, and your best and worst past posts, and votes approve, hold or reject, with a confidence score.
+
+A clip is approved only when Claude approves with confidence of at least `min_confidence`, the brief is met, and history predicts at least `min_percentile`, up to `max_per_day`. Until you have `min_history` posts with views (cold start), the bar is AI quality of at least `cold_start_min_quality`, with at most `cold_start_max_per_day` approvals. Clips both opinions call weak are rejected; everything else waits for you with the reason on the card.
+
+These are never auto-approved, whatever the settings: `test` footage, clips flagged as spoilers or unsafe, clips without an AI spoiler check, and channels without permission. Auto-approved clips wait `veto_minutes` (default 10) before posting. **Undo approve** on the card stops them. Ready clips still unposted after `expire_hours` are dropped, because launch-week moments go stale.
+
+The model learns from view counts. API-posted clips update automatically (`clipper stats --refresh`, also run every 2 hours). For clips you post by hand from `data/export/`, type the post URL and its views into the card's **Posts** row once it's a day old. `clipper stats` compares views per clip for AI-approved and human-approved clips, so you can see whether the AI is earning its place.
+
+```bash
+.venv/bin/clipper autoreview --dry-run
+```
+
+shows what it would decide right now without changing anything. Each review costs a Claude call at high effort, a few cents per clip.
+
 Other commands:
 
 | Command | Use |
@@ -60,6 +79,7 @@ Other commands:
 | `clipper review` | Just the review UI and renderer |
 | `clipper ingest my_gameplay.mp4 -c mylogin --render` | Find loud moments in your own recording (or a VOD a campaign named) |
 | `clipper cut vod.mp4 -c login --start 1:02:30 --duration 30 --render` | Cut one clip by hand |
+| `clipper autoreview [--dry-run]` | One auto-approval pass now (dry run changes nothing) |
 | `clipper post` | One posting pass now |
 | `clipper stats --refresh` | Views and estimated campaign earnings, by campaign |
 | `clipper auth youtube` / `clipper auth tiktok` | One-time OAuth consent |
@@ -73,7 +93,7 @@ Every channel needs `permission`:
 - `own`: your own footage.
 - `test`: record and render locally, never posted.
 
-A channel without one is never recorded. Clips flagged as a high spoiler risk or unsafe can't be posted, and nothing posts without your approval.
+A channel without one is never recorded. Clips flagged as a high spoiler risk or unsafe can't be posted. Nothing posts unless you approved it or the auto-approver did under the rules above.
 
 ## Posting platforms
 

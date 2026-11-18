@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from dataclasses import asdict, dataclass, field
+
+from .ai import call_json
 
 log = logging.getLogger(__name__)
 
@@ -96,11 +97,6 @@ def template_meta(channel_cfg: dict, campaign: dict | None, top_terms: list[str]
     )
 
 
-def _have_credentials() -> bool:
-    return bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")
-                or os.path.exists(os.path.expanduser("~/.config/anthropic")))
-
-
 def generate(
     cfg: dict,
     channel_cfg: dict,
@@ -110,13 +106,6 @@ def generate(
     chat_sample: list[str],
 ) -> ClipMeta:
     ai = cfg["ai"]
-    if not ai.get("enabled") or not _have_credentials():
-        return template_meta(channel_cfg, campaign, top_terms, transcript)
-    try:
-        import anthropic
-    except ImportError:
-        return template_meta(channel_cfg, campaign, top_terms, transcript)
-
     rules = "none (unpaid)"
     if campaign:
         rules = json.dumps({
@@ -134,44 +123,13 @@ def generate(
         f"Sample chat lines: {json.dumps(chat_sample[:10])}\n"
         f"Transcript:\n<transcript>\n{transcript.strip() or '(no speech detected)'}\n</transcript>"
     )
-    client = anthropic.Anthropic()
-    try:
-        response = client.beta.messages.create(
-            model=ai.get("model", "claude-opus-5-5"),
-            max_tokens=16000,
-            betas=["server-side-fallback-2026-07-01"],
-            fallbacks="default",
-            output_config={
-                "effort": ai.get("effort", "medium"),
-                "format": {"type": "json_schema", "schema": SCHEMA},
-            },
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user}],
-        )
-    except anthropic.AuthenticationError:
-        log.error("Anthropic API key rejected; using template metadata")
-        return template_meta(channel_cfg, campaign, top_terms, transcript)
-    except anthropic.RateLimitError:
-        log.warning("Anthropic rate limit; using template metadata for this clip")
-        return template_meta(channel_cfg, campaign, top_terms, transcript)
-    except anthropic.APIStatusError as exc:
-        log.warning("Anthropic API error %s; using template metadata", exc.status_code)
-        return template_meta(channel_cfg, campaign, top_terms, transcript)
-    except anthropic.APIConnectionError:
-        log.warning("Anthropic API unreachable; using template metadata")
-        return template_meta(channel_cfg, campaign, top_terms, transcript)
-
-    if response.stop_reason == "refusal":
+    data, model = call_json(cfg, SYSTEM_PROMPT, user, SCHEMA)
+    if data is None:
         meta = template_meta(channel_cfg, campaign, top_terms, transcript)
-        meta.unsafe = True
-        meta.why = "model declined to write copy for this clip; review manually"
+        if model == "refusal":
+            meta.unsafe = True
+            meta.why = "model declined to write copy for this clip; review manually"
         return meta
-    text = "".join(b.text for b in response.content if b.type == "text")
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
-        log.warning("unparseable metadata response; using template")
-        return template_meta(channel_cfg, campaign, top_terms, transcript)
 
     caption = data["caption"]
     credit = _credit_line(channel_cfg)
@@ -194,5 +152,5 @@ def generate(
         unsafe=bool(data["unsafe"]),
         quality=max(0, min(10, int(data["quality"]))),
         why=data["why"],
-        source=response.model,
+        source=model,
     )

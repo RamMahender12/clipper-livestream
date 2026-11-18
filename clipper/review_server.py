@@ -6,12 +6,13 @@ import json
 import logging
 import re
 import threading
+import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import scheduler
+from . import autoapprove, scheduler
 from .db import DB
 
 log = logging.getLogger(__name__)
@@ -44,6 +45,10 @@ textarea{min-height:70px;resize:vertical}
 .actions button{flex:1;border:0;border-radius:8px;padding:9px;font-weight:600;cursor:pointer}
 .approve{background:var(--ok);color:#06210f}.reject{background:#2a2d35;color:var(--text)}.rerender{background:#2a2d35;color:var(--accent)}
 .empty{color:var(--mute);padding:40px;text-align:center;grid-column:1/-1}
+.pill.auto{color:#111;background:var(--accent);border-color:var(--accent)}
+.decision{font-size:12px;border-left:3px solid var(--accent);padding:4px 8px;background:#1d2026;color:var(--text)}
+.post{display:flex;gap:6px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--mute)}
+.post input{width:auto;flex:1;min-width:90px;padding:4px 6px}.post button{background:#2a2d35;color:var(--text);border:0;border-radius:6px;padding:5px 9px;cursor:pointer}
 a{color:var(--accent)}
 @media (max-width:420px){main{padding:10px;grid-template-columns:1fr}}
 </style></head><body>
@@ -62,13 +67,18 @@ function tabs(counts){document.getElementById("tabs").innerHTML=TABS.map(t=>`<bu
 function setTab(t){tab=t;load()}
 async function load(){
   const [clips,sum]=await Promise.all([fetch(`/api/clips?status=${tab}`).then(r=>r.json()),fetch("/api/summary").then(r=>r.json())]);
-  document.getElementById("stats").innerHTML=`<b>${sum.posts}</b> posts · <b>${sum.views.toLocaleString()}</b> views · est <b>$${sum.est_usd.toFixed(2)}</b>`;
+  const a=sum.auto||{};
+  document.getElementById("stats").innerHTML=`<b>${sum.posts}</b> posts · <b>${sum.views.toLocaleString()}</b> views · est <b>$${sum.est_usd.toFixed(2)}</b> · auto-approve <b>${a.enabled?"ON":"off"}</b>${a.enabled?` ${a.today}/${a.limit} today · history ${a.history}/${a.min_history}`:""}`;
   document.getElementById("watch").textContent=(sum.watchers||[]).join("  |  ");
   tabs(sum.clips||{});
   const g=document.getElementById("grid");
   if(!clips.length){g.innerHTML=`<div class="empty">No ${tab} clips.</div>`;return}
   g.innerHTML=clips.map(c=>{
-    const n=c.notes||{};const posts=(c.posts||[]).map(p=>p.url?`<a href="${esc(p.url)}" target="_blank">${esc(p.platform)}</a> ${p.views||0} views`:`${esc(p.platform)}: ${esc(p.status)} ${esc(p.error)}`).join(" · ");
+    const n=c.notes||{};
+    const posts=(c.posts||[]).map(p=>`<div class="post"><b>${esc(p.platform)}</b> ${esc(p.status)}${p.error?" "+esc(p.error):""}
+      <input id="pu${p.id}" placeholder="post URL" value="${esc(p.url&&!p.url.startsWith("file:")?p.url:"")}">
+      <input id="pv${p.id}" type="number" min="0" placeholder="views" value="${p.views||""}" style="max-width:90px">
+      <button onclick="savePost(${p.id})">Save</button></div>`).join("");
     return `<div class="card" id="c${c.id}">
       ${c.final_path?`<video src="/media/${c.id}.mp4" controls preload="none" poster="/thumb/${c.id}.jpg"></video>`:""}
       <div class="body">
@@ -76,7 +86,10 @@ async function load(){
           <span class="pill">${esc(c.campaign_id||"no campaign")}</span>
           <span class="pill ${esc(c.spoiler_risk)}">spoiler: ${esc(c.spoiler_risk)}</span>
           <span class="pill">quality ${c.quality}/10</span><span class="pill">score ${Number(c.score).toFixed(1)}</span>
-          ${n.unsafe?'<span class="pill high">UNSAFE</span>':""}</div>
+          ${n.unsafe?'<span class="pill high">UNSAFE</span>':""}
+          ${c.decided_by?`<span class="pill ${c.decided_by==="auto"?"auto":""}">${c.decided_by==="auto"?"AI":"you"}: ${esc(c.status)}</span>`:""}
+          ${c.expected_views?`<span class="pill">~${Number(c.expected_views).toLocaleString()} views expected</span>`:""}</div>
+        ${c.decision_note?`<div class="decision">${esc(c.decision_note)}</div>`:""}
         ${n.why?`<div class="note">${esc(n.why)}</div>`:""}
         ${c.error?`<div class="note" style="color:var(--bad)">${esc(c.error)}</div>`:""}
         <label>Hook (burned into video)</label><input id="h${c.id}" value="${esc(c.hook)}">
@@ -85,9 +98,10 @@ async function load(){
         <label>Hashtags</label><input id="g${c.id}" value="${esc(c.hashtags)}">
         ${n.take?`<div class="note"><b>Your take:</b> ${esc(n.take)}</div>`:""}
         <details><summary class="note">Transcript</summary><div class="note">${esc(c.transcript)||"(none)"}</div></details>
-        ${posts?`<div class="note">${posts}</div>`:""}
+        ${posts?`<label>Posts (add the URL and views when you post by hand; the auto-approver learns from them)</label>${posts}`:""}
         <div class="actions">
           ${["ready","rejected","failed"].includes(c.status)?`<button class="approve" onclick="act(${c.id},'approve')">Approve</button>`:""}
+          ${c.status==="approved"?`<button class="reject" onclick="act(${c.id},'unapprove')">Undo approve</button>`:""}
           ${c.status!=="posted"&&c.status!=="rejected"?`<button class="reject" onclick="act(${c.id},'reject')">Reject</button>`:""}
           <button class="rerender" onclick="act(${c.id},'rerender')">Save + re-render</button>
         </div>
@@ -97,6 +111,12 @@ async function act(id,action){
   const body={action,hook:document.getElementById("h"+id).value,title:document.getElementById("t"+id).value,
     caption:document.getElementById("p"+id).value,hashtags:document.getElementById("g"+id).value};
   const r=await fetch(`/api/clips/${id}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  if(!r.ok){alert(await r.text());return}
+  load();
+}
+async function savePost(id){
+  const body={url:document.getElementById("pu"+id).value,views:document.getElementById("pv"+id).value};
+  const r=await fetch(`/api/posts/${id}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
   if(!r.ok){alert(await r.text());return}
   load();
 }
@@ -181,12 +201,13 @@ def make_handler(db: DB, cfg: dict, watchers: list):
                     except json.JSONDecodeError:
                         d["notes"] = {}
                     d["posts"] = [dict(p) for p in db.query(
-                        "SELECT platform, url, status, error, views FROM posts WHERE clip_id = ?", (r["id"],))]
+                        "SELECT id, platform, url, status, error, views FROM posts WHERE clip_id = ?", (r["id"],))]
                     out.append(d)
                 self._json(out)
             elif url.path == "/api/summary":
                 s = scheduler.earnings_summary(db, cfg)
                 s["watchers"] = [f"{w.login}: {w.status}" for w in watchers]
+                s["auto"] = autoapprove.status(db, cfg)
                 self._json(s)
             elif m := re.fullmatch(r"/media/(\d+)\.mp4", url.path):
                 row = self._clip(int(m.group(1)))
@@ -203,26 +224,56 @@ def make_handler(db: DB, cfg: dict, watchers: list):
             else:
                 self.send_error(HTTPStatus.NOT_FOUND)
 
+        def _body(self) -> dict | None:
+            length = int(self.headers.get("Content-Length", "0") or 0)
+            try:
+                return json.loads(self.rfile.read(min(length, 1_000_000)) or b"{}")
+            except json.JSONDecodeError:
+                return None
+
         def do_POST(self):
-            m = re.fullmatch(r"/api/clips/(\d+)", urlparse(self.path).path)
-            if not m:
-                self.send_error(HTTPStatus.NOT_FOUND)
-                return
             # same-origin only: the page is served from here, reject cross-site posts
             origin = self.headers.get("Origin")
             host = self.headers.get("Host", "")
             if origin and urlparse(origin).netloc != host:
                 self.send_error(HTTPStatus.FORBIDDEN)
                 return
+            path = urlparse(self.path).path
+            if pm := re.fullmatch(r"/api/posts/(\d+)", path):
+                post = db.one("SELECT * FROM posts WHERE id = ?", (int(pm.group(1)),))
+                body = self._body()
+                if not post or body is None:
+                    self.send_error(HTTPStatus.BAD_REQUEST)
+                    return
+                fields = {}
+                url = str(body.get("url", "")).strip()[:500]
+                if url:
+                    if not re.match(r"https?://", url):
+                        self._json({"error": "URL must start with http(s)://"}, HTTPStatus.BAD_REQUEST)
+                        return
+                    fields["url"] = url
+                if str(body.get("views", "")).strip():
+                    try:
+                        fields["views"] = max(0, int(body["views"]))
+                    except (TypeError, ValueError):
+                        self._json({"error": "views must be a number"}, HTTPStatus.BAD_REQUEST)
+                        return
+                    fields["stats_at"] = time.time()
+                if fields:
+                    db.update("posts", post["id"], **fields)
+                self._json({"ok": True})
+                return
+            m = re.fullmatch(r"/api/clips/(\d+)", path)
+            if not m:
+                self.send_error(HTTPStatus.NOT_FOUND)
+                return
             clip_id = int(m.group(1))
             row = self._clip(clip_id)
             if not row:
                 self.send_error(HTTPStatus.NOT_FOUND)
                 return
-            length = int(self.headers.get("Content-Length", "0") or 0)
-            try:
-                body = json.loads(self.rfile.read(min(length, 1_000_000)) or b"{}")
-            except json.JSONDecodeError:
+            body = self._body()
+            if body is None:
                 self.send_error(HTTPStatus.BAD_REQUEST)
                 return
             fields = {k: str(body[k])[:3000] for k in ("hook", "title", "caption", "hashtags") if k in body}
@@ -234,16 +285,26 @@ def make_handler(db: DB, cfg: dict, watchers: list):
                 if fields.get("hook", row["hook"]) != row["hook"]:
                     self._json({"error": "hook changed: use Save + re-render first"}, HTTPStatus.CONFLICT)
                     return
-                db.update("clips", clip_id, status="approved", **fields)
+                db.update("clips", clip_id, status="approved", decided_by="human",
+                          decided_at=time.time(), decision_note="Approved by you", **fields)
             elif action == "reject":
-                db.update("clips", clip_id, status="rejected", **fields)
+                db.update("clips", clip_id, status="rejected", decided_by="human",
+                          decided_at=time.time(), decision_note="Rejected by you", **fields)
+            elif action == "unapprove":
+                if row["status"] != "approved":
+                    self._json({"error": f"clip is {row['status']}"}, HTTPStatus.CONFLICT)
+                    return
+                db.update("clips", clip_id, status="ready", decided_by="human",
+                          decided_at=time.time(), decision_note="Approval undone by you", **fields)
             elif action == "rerender":
                 if row["status"] in ("rendering", "posted"):
                     self._json({"error": f"clip is {row['status']}"}, HTTPStatus.CONFLICT)
                     return
                 if not fields.get("hook", row["hook"]):
                     fields["hook"] = " "  # keep empty hook, skip regeneration
-                db.update("clips", clip_id, status="queued", error="", **fields)
+                # edited by a human: clear the old decision so it gets re-reviewed after rendering
+                db.update("clips", clip_id, status="queued", error="", decided_by="",
+                          decision_note="", **fields)
             else:
                 self.send_error(HTTPStatus.BAD_REQUEST)
                 return

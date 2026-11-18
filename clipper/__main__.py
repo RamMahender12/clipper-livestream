@@ -7,6 +7,7 @@
   clipper review               review UI + renderer only (no recording, no posting)
   clipper ingest FILE -c LOGIN find loud moments in a local video and queue clips
   clipper cut FILE -c LOGIN --start 1:23:45 --duration 30
+  clipper autoreview [--dry-run]  one AI auto-approval pass over ready clips
   clipper post                 one posting pass for approved clips
   clipper stats [--refresh]    views and estimated campaign earnings
   clipper launch-times         GTA 6 regional unlock times in your timezone
@@ -88,6 +89,12 @@ def cmd_doctor(args, cfg) -> int:
     have_key = bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"))
     print(f"  [{'ok' if have_key else '--'}] Anthropic credentials"
           f"{'' if have_key else ' - not set: hooks/titles fall back to templates (export ANTHROPIC_API_KEY=...)'}")
+    acfg = cfg["auto_approve"]
+    if acfg.get("enabled"):
+        print(f"  [{'ok' if have_key else '!!'}] auto-approve ON"
+              f"{'' if have_key else ' - needs Anthropic credentials, otherwise every clip is held for you'}")
+    else:
+        print("  [--] auto-approve off (set [auto_approve] enabled = true)")
     print("Channels")
     if not cfg["channels"]:
         line(False, "no channels configured")
@@ -148,6 +155,12 @@ def cmd_run(args, cfg, review_only: bool = False) -> int:
         pipeline.RenderWorker(db, cfg, stop, i).start()
     if not review_only and not args.no_post:
         scheduler.Scheduler(db, cfg, stop).start()
+    if not review_only and cfg["auto_approve"].get("enabled"):
+        from .autoapprove import AutoApprover
+
+        AutoApprover(db, cfg, stop).start()
+        log.info("auto-approve is ON (max %s/day, %s min undo window)",
+                 cfg["auto_approve"]["max_per_day"], cfg["auto_approve"]["veto_minutes"])
     review_server.serve(db, cfg, watchers, stop)
     print(f"Review clips at http://{cfg['review']['host']}:{cfg['review']['port']}  (Ctrl-C to stop)")
     while not stop.wait(30):
@@ -201,6 +214,21 @@ def cmd_cut(args, cfg) -> int:
     return 0
 
 
+def cmd_autoreview(args, cfg) -> int:
+    from . import autoapprove
+
+    db = open_db(cfg)
+    st = autoapprove.status(db, cfg)
+    print(f"history: {st['history']} posts with view data (stats model needs {st['min_history']}); "
+          f"auto-approved in last 24h: {st['today']}/{st['limit']}")
+    lines = autoapprove.run_once(db, cfg, dry_run=args.dry_run)
+    for line in lines or ["no ready clips to review"]:
+        print(line)
+    if args.dry_run:
+        print("(dry run: nothing changed)")
+    return 0
+
+
 def cmd_post(args, cfg) -> int:
     from . import scheduler
 
@@ -221,6 +249,8 @@ def cmd_stats(args, cfg) -> int:
     for camp, agg in sorted(s["by_campaign"].items()):
         print(f"  {camp:<28} {agg['posts']:>4} posts {agg['views']:>12,} views  ${agg['est_usd']:.2f}")
     print("Estimates assume every view qualifies; campaigns verify and may pay less.")
+    for who, agg in sorted(s.get("by_decider", {}).items()):
+        print(f"  approved by {who:<6} {agg['clips']:>4} clips  {agg['views_per_clip']:>10,} views/clip")
     rows = db.query("SELECT campaign_id, platform, url, posted_at FROM posts "
                     "WHERE campaign_id != '' AND url != '' AND status != 'error' ORDER BY campaign_id, posted_at")
     if rows:
@@ -296,6 +326,8 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--start", required=True)
     c.add_argument("--duration", type=float, default=30)
     c.add_argument("--render", action="store_true")
+    ar = sub.add_parser("autoreview")
+    ar.add_argument("--dry-run", action="store_true", help="show decisions without changing anything")
     sub.add_parser("post")
     s = sub.add_parser("stats")
     s.add_argument("--refresh", action="store_true")
@@ -313,7 +345,7 @@ def main(argv: list[str] | None = None) -> int:
     handlers = {
         "doctor": cmd_doctor, "live": cmd_live, "run": cmd_run, "ingest": cmd_ingest,
         "cut": cmd_cut, "post": cmd_post, "stats": cmd_stats, "launch-times": cmd_launch_times,
-        "auth": cmd_auth,
+        "auth": cmd_auth, "autoreview": cmd_autoreview,
     }
     if args.cmd == "review":
         args.no_watch = args.no_post = True

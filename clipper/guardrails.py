@@ -71,6 +71,33 @@ def can_post(cfg: dict, channel_cfg: dict | None, clip: dict, platform: str) -> 
     return True, "ok"
 
 
+def auto_gate(cfg: dict, channel_cfg: dict | None, clip: dict, notes: dict) -> tuple[bool, str]:
+    """Checks a clip must pass before the AI may approve it on its own.
+    These can't be switched off: anything failing them waits for a human."""
+    kind, detail = permission(channel_cfg)
+    if not kind:
+        return False, "channel has no permission"
+    if kind == "test":
+        return False, "test footage is never posted"
+    if not clip.get("final_path"):
+        return False, "not rendered"
+    if notes.get("source", "template") == "template":
+        return False, "no AI spoiler/safety check (template packaging; set ANTHROPIC_API_KEY)"
+    if notes.get("unsafe"):
+        return False, "flagged unsafe"
+    allowed = {"none"} | ({"low"} if cfg.get("auto_approve", {}).get("allow_spoiler_low") else set())
+    risk = clip.get("spoiler_risk") or "unknown"
+    if risk not in allowed:
+        return False, f"spoiler risk is {risk}"
+    if kind == "campaign":
+        camp = config_mod.campaign(cfg, detail)
+        if not camp:
+            return False, f"campaign '{detail}' is not defined in config"
+        if camp.get("active") is False:
+            return False, f"campaign '{detail}' is marked inactive"
+    return True, "ok"
+
+
 def pacing_ok(cfg: dict, db, platform: str, now: float | None = None) -> tuple[bool, str]:
     now = now or time.time()
     posting = cfg["posting"]

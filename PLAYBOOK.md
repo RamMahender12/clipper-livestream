@@ -39,7 +39,7 @@ Realized earnings are lower than headline rates. One tracker reports a blended *
 The tool enforces the first four. The rest are on you.
 
 1. **Permission for every channel.** Each channel in `config.toml` needs `permission = "campaign:<id>" | "written:<link>" | "own" | "test"`. No permission, no recording. `test` is never posted.
-2. **A human approves every post.** Nothing goes out until you click Approve in the review UI.
+2. **Every post is approved, by you or by the auto-approver.** The AI approves only clips that pass Claude's review and fit your posting history. Test footage and clips flagged as spoilers or unsafe always wait for you, and auto-approved clips sit for 10 minutes so you can undo them.
 3. **No spoilers.** Rockstar's policy (support.rockstargames.com, updated 10 Jan 2025) has takedowns for story endings, isolated cutscenes, edited cutscene compilations and big plot reveals, plus in-game TV/comedy shows posted on their own, cheating/glitch/mod-menu content, and **any pre-release footage**. Claude flags spoiler risk on each clip; high-risk clips can't be posted. Launch week is peak spoiler-anger season: clip the player's reactions and chaos, not the plot.
 4. **Official APIs only, paced posting.** No bots, no browser automation, no follow/like schemes, daily caps and a minimum gap between posts.
 5. **Rockstar's fine print.** Its written policy covers *non-commercial* fan use and reserves the right to take down anything. Monetized GTA gameplay on YouTube and Twitch has been tolerated for a decade, but it's tolerance, not a license. Don't build on anything Rockstar could object to (spoilers, leaks, music, mods), and keep a backlog so one takedown doesn't stall you.
@@ -73,7 +73,9 @@ The tool enforces the first four. The rest are on you.
 
 1. **Morning (30 min):** check campaign boards (Whop Content Rewards discover, GTAVIclipper board, clipping Discords) for new GTA 6 or streamer campaigns. Add each to `[[campaigns]]` and its streamer to `[[channels]]` with `permission = "campaign:<id>"`.
 2. **All day:** leave `clipper run` going. It records whoever is live, cuts spikes, captions them and writes hooks.
-3. **Every 30-60 min:** open http://127.0.0.1:8765. Approve the best clips, fix weak hooks (hook edits re-render), reject anything spoilery, mean or boring. Post the AI's "take" as a pinned comment.
+3. **Every 30-60 min:** open http://127.0.0.1:8765. Skim what the AI approved (undo anything off), clear the held clips it left for you, and fix weak hooks (hook edits re-render). Post the AI's "take" as a pinned comment. For clips you posted by hand, type in yesterday's views: that's what the auto-approver learns from.
+   - Days 1-3 (cold start): keep a close eye on auto-approvals; the AI has no history yet and caps itself at 6 a day.
+   - After about 15 posts with views: compare "approved by auto" and "approved by human" in `clipper stats`. If the AI's clips average fewer views than yours, raise `min_confidence` or `min_percentile`.
 4. **Submit:** campaigns pay only for posts you submit in their dashboard. After posting, submit each URL (`clipper stats` lists them by campaign).
 5. **Evening:** make one original piece (your gameplay, a tips video, a news recap in your voice) to keep the account original.
 6. **Weekly:** `clipper stats --refresh`. Drop campaigns that don't approve your clips, raise volume on the ones that pay, and retune `[detect]` per streamer if clips start too early or late.

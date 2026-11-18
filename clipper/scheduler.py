@@ -30,8 +30,11 @@ def post_once(db: DB, cfg: dict) -> list[str]:
 
     log_lines = []
     platforms = cfg["posting"]["platforms"]
+    # human approvals first, then the clips expected to do best
     approved = [_clip_dict(r) for r in db.query(
-        "SELECT * FROM clips WHERE status = 'approved' ORDER BY quality DESC, score DESC, id ASC")]
+        "SELECT * FROM clips WHERE status = 'approved' ORDER BY (decided_by = 'human') DESC, "
+        "expected_views DESC, quality DESC, score DESC, id ASC")]
+    veto = float(cfg.get("auto_approve", {}).get("veto_minutes", 0)) * 60
     for platform in platforms:
         ok, why = guardrails.pacing_ok(cfg, db, platform)
         if not ok:
@@ -45,6 +48,8 @@ def post_once(db: DB, cfg: dict) -> list[str]:
         for clip in approved:
             if db.one("SELECT id FROM posts WHERE clip_id = ? AND platform = ?", (clip["id"], platform)):
                 continue
+            if clip.get("decided_by") == "auto" and time.time() - (clip.get("decided_at") or 0) < veto:
+                continue  # still inside the undo window
             ch = config_mod.channel(cfg, clip["channel"])
             allowed, reason = guardrails.can_post(cfg, ch, clip, platform)
             if not allowed:
@@ -118,8 +123,15 @@ def earnings_summary(db: DB, cfg: dict) -> dict:
         total_views += p["views"] or 0
         total_est += est
     counts = {r["status"]: r["n"] for r in db.query("SELECT status, COUNT(*) AS n FROM clips GROUP BY status")}
+    by_decider: dict[str, dict] = {}
+    for r in db.query(
+        "SELECT COALESCE(NULLIF(c.decided_by, ''), 'human') AS who, COUNT(DISTINCT c.id) AS clips, "
+        "COALESCE(SUM(p.views), 0) AS views FROM clips c JOIN posts p ON p.clip_id = c.id "
+        "WHERE p.status != 'error' GROUP BY who"):
+        by_decider[r["who"]] = {"clips": r["clips"], "views": r["views"],
+                                "views_per_clip": round(r["views"] / r["clips"]) if r["clips"] else 0}
     return {"clips": counts, "posts": len(rows), "views": total_views,
-            "est_usd": round(total_est, 2), "by_campaign": by_campaign}
+            "est_usd": round(total_est, 2), "by_campaign": by_campaign, "by_decider": by_decider}
 
 
 class Scheduler(threading.Thread):
