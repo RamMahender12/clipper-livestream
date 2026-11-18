@@ -11,7 +11,9 @@
   clipper post                 one posting pass for approved clips
   clipper stats [--refresh]    views and estimated campaign earnings
   clipper launch-times         GTA 6 regional unlock times in your timezone
-  clipper auth youtube|tiktok  one-time OAuth consent
+  clipper auth youtube --channel LOGIN   link a streamer's YouTube channel (one-time)
+  clipper instagram-accounts   list Instagram Business account IDs for the token
+  clipper telegram setup|test  connect and test phone alerts
   clipper service install|status|restart|stop|start|uninstall
                                run unattended in the background (macOS launchd)
 """
@@ -124,14 +126,31 @@ def cmd_doctor(args, cfg) -> int:
         extra = f" -> campaign {camp['id']} ${camp.get('rate_per_1k')}/1k cap ${camp.get('cap_per_clip')}" if camp else ""
         line(good, ch.get("login", "?"), why + extra)
     print("Publishing")
-    from .publishers import get_publisher
+    from . import notify
+    from .publishers import channel_account, get_publisher
 
     for p in cfg["posting"]["platforms"]:
-        try:
-            good, msg = get_publisher(p, cfg).ready()
-        except Exception as exc:  # noqa: BLE001
-            good, msg = False, str(exc)
-        line(good, p, msg.splitlines()[0] if msg else "")
+        if p == "export":
+            line(True, "export", "writes files to data/export/<date>/")
+            continue
+        for ch in cfg["channels"]:
+            kind, _ = guardrails.permission(ch)
+            if kind in (None, "test"):
+                continue
+            account = channel_account(cfg, ch, p)
+            if not account:
+                hint = (f"run: clipper auth youtube --channel {ch['login']}" if p == "youtube"
+                        else f"set instagram_user_id on the channel (clipper instagram-accounts)"
+                        if p == "instagram" else "no account set")
+                line(False, f"{p} for {ch['login']}", hint)
+                continue
+            try:
+                good, msg = get_publisher(p, cfg, ch).ready()
+            except Exception as exc:  # noqa: BLE001
+                good, msg = False, str(exc)
+            line(good, f"{p} for {ch['login']}", (msg or "").splitlines()[0] if msg else account)
+    print(f"  [{'ok' if notify.configured() else '--'}] Telegram alerts"
+          f"{'' if notify.configured() else ' - not set up (clipper telegram setup)'}")
     print("\nAll good." if ok else "\nFix the !! items above.")
     return 0 if ok else 1
 
@@ -360,9 +379,21 @@ def cmd_launch_times(args, cfg) -> int:
 
 def cmd_auth(args, cfg) -> int:
     if args.platform == "youtube":
-        from .publishers import youtube
+        from .publishers import youtube, youtube_token_path
 
-        youtube.authorize(cfg)
+        if args.channel:
+            ch = config_mod.channel(cfg, args.channel)
+            if not ch:
+                print(f"No channel '{args.channel}' in config.toml")
+                return 1
+            token = youtube_token_path(cfg, ch)
+            acfg = dict(cfg)
+            acfg["youtube"] = {**cfg["youtube"], "token_file": token}
+            print(f"Sign in and pick the YouTube channel for {ch.get('display_name') or ch['login']}'s clips.")
+            youtube.authorize(acfg)
+            print(f"Saved {token}. Redeploy to copy it to the server.")
+        else:
+            youtube.authorize(cfg)
     elif args.platform == "tiktok":
         from .publishers import tiktok
 
@@ -371,6 +402,63 @@ def cmd_auth(args, cfg) -> int:
         print("Instagram uses a long-lived token: set the env var named in [instagram].access_token_env")
         return 1
     return 0
+
+
+def cmd_instagram_accounts(args, cfg) -> int:
+    """List the Instagram Business accounts the token can post to, with their IDs."""
+    import json as _json
+    import urllib.parse
+    import urllib.request
+
+    ig = cfg["instagram"]
+    token = os.environ.get(ig.get("access_token_env", "IG_ACCESS_TOKEN"), "").strip()
+    if not token:
+        print(f"Set {ig.get('access_token_env', 'IG_ACCESS_TOKEN')} in secrets/clipper.env first.")
+        return 1
+    url = (f"https://graph.facebook.com/{ig.get('graph_version', 'v27.0')}/me/accounts?"
+           + urllib.parse.urlencode({"fields": "name,instagram_business_account{id,username}",
+                                     "limit": 100, "access_token": token}))
+    try:
+        with urllib.request.urlopen(url, timeout=30) as resp:
+            data = _json.load(resp)
+    except Exception as exc:  # noqa: BLE001
+        print(f"Graph API error: {exc}")
+        return 1
+    found = 0
+    for page in data.get("data", []):
+        acct = page.get("instagram_business_account")
+        if acct:
+            found += 1
+            print(f"  @{acct.get('username', '?'):<24} instagram_user_id = \"{acct['id']}\"   (Facebook Page: {page.get('name')})")
+    if not found:
+        print("No Instagram Business accounts found. Each one must be linked to a Facebook Page you manage.")
+    return 0
+
+
+def cmd_telegram(args, cfg) -> int:
+    from . import notify, service
+
+    if not os.environ.get("TELEGRAM_BOT_TOKEN"):
+        print("Add TELEGRAM_BOT_TOKEN=... (from @BotFather) to secrets/clipper.env first.")
+        return 1
+    if args.action == "setup":
+        chats = notify.find_chat_ids()
+        if not chats:
+            print("No messages found. Open your bot in Telegram, press Start (or send 'hi'), then run this again.")
+            return 1
+        chat_id, name = chats[-1]
+        env_path = config_mod.ROOT / service.ENV_FILE
+        text = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
+        lines = [l for l in text.splitlines() if not l.strip().startswith("TELEGRAM_CHAT_ID=")]
+        lines.append(f"TELEGRAM_CHAT_ID={chat_id}")
+        env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        os.chmod(env_path, 0o600)
+        os.environ["TELEGRAM_CHAT_ID"] = chat_id
+        print(f"Saved TELEGRAM_CHAT_ID for chat '{name}'.")
+    ok = notify.send("Clipper alerts are connected. You'll get a message with links to submit "
+                     "every time new clips go live.")
+    print("Test message sent." if ok else "Sending failed: check the bot token and that you pressed Start.")
+    return 0 if ok else 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -409,6 +497,10 @@ def main(argv: list[str] | None = None) -> int:
     sv.add_argument("action", choices=["install", "status", "start", "stop", "restart", "uninstall"])
     a = sub.add_parser("auth")
     a.add_argument("platform", choices=["youtube", "tiktok", "instagram"])
+    a.add_argument("--channel", help="link this streamer's own account (e.g. lacy)")
+    sub.add_parser("instagram-accounts")
+    tg = sub.add_parser("telegram")
+    tg.add_argument("action", choices=["setup", "test"])
     args = ap.parse_args(argv)
 
     if args.cmd == "init":
@@ -424,6 +516,7 @@ def main(argv: list[str] | None = None) -> int:
         "doctor": cmd_doctor, "live": cmd_live, "run": cmd_run, "ingest": cmd_ingest,
         "cut": cmd_cut, "post": cmd_post, "stats": cmd_stats, "launch-times": cmd_launch_times,
         "auth": cmd_auth, "autoreview": cmd_autoreview, "service": cmd_service,
+        "instagram-accounts": cmd_instagram_accounts, "telegram": cmd_telegram,
     }
     if args.cmd == "review":
         args.no_watch = args.no_post = True

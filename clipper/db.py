@@ -85,6 +85,9 @@ MIGRATIONS: dict[str, list[tuple[str, str]]] = {
         ("auto_checked_at", "REAL"),
         ("expected_views", "INTEGER DEFAULT 0"),
     ],
+    "posts": [
+        ("account", "TEXT DEFAULT ''"),  # which page posted it (per-streamer accounts)
+    ],
 }
 
 # Clip lifecycle: queued -> rendering -> ready -> approved -> posted

@@ -114,29 +114,37 @@ def auto_gate(cfg: dict, channel_cfg: dict | None, clip: dict, notes: dict) -> t
     return True, "ok"
 
 
-def pacing_ok(cfg: dict, db, platform: str, now: float | None = None) -> tuple[bool, str]:
+def pacing_ok(cfg: dict, db, platform: str, now: float | None = None,
+              account: str | None = None) -> tuple[bool, str]:
+    """Daily cap and minimum gap per account (per platform if no account given)."""
     now = now or time.time()
     posting = cfg["posting"]
     cap = int(posting.get("max_posts_per_day", {}).get(platform, 10))
+    where, args = "platform = ?", [platform]
+    label = platform
+    if account is not None:
+        where += " AND account = ?"
+        args.append(account)
+        label = f"{platform} ({account.rsplit('/', 1)[-1]})"
     day_count = db.one(
-        "SELECT COUNT(*) AS n FROM posts WHERE platform = ? AND posted_at > ? AND status != 'error'",
-        (platform, now - 86400),
+        f"SELECT COUNT(*) AS n FROM posts WHERE {where} AND posted_at > ? AND status != 'error'",
+        (*args, now - 86400),
     )["n"]
     if day_count >= cap:
-        return False, f"{platform}: daily cap {cap} reached"
+        return False, f"{label}: daily cap {cap} reached"
     if platform != "export":
         last = db.one(
-            "SELECT MAX(posted_at) AS t FROM posts WHERE platform = ? AND status != 'error'",
-            (platform,),
+            f"SELECT MAX(posted_at) AS t FROM posts WHERE {where} AND status != 'error'",
+            tuple(args),
         )["t"]
         gap = float(posting.get("min_gap_minutes", 45)) * 60
         if last and now - last < gap:
-            return False, f"{platform}: next slot in {int((gap - (now - last)) / 60) + 1} min"
+            return False, f"{label}: next slot in {int((gap - (now - last)) / 60) + 1} min"
         quiet = set(posting.get("quiet_hours", []))
         if quiet:
             hour = datetime.fromtimestamp(now, ZoneInfo(posting.get("timezone", "UTC"))).hour
             if hour in quiet:
-                return False, f"{platform}: quiet hours"
+                return False, f"{label}: quiet hours"
     return True, "ok"
 
 

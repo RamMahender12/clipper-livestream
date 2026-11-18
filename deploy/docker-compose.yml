@@ -36,6 +36,7 @@ services:
       CLIPPER_DOMAIN: ${CLIPPER_DOMAIN:?set CLIPPER_DOMAIN in deploy/.env}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./public:/srv/public:ro       # /about, /privacy, /terms (public)
       - ../secrets/auth.caddy:/etc/caddy/auth.caddy:ro
       - caddy_data:/data             # HTTPS certificates
       - caddy_config:/config
