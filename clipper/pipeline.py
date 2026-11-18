@@ -79,7 +79,8 @@ def process_clip(db: DB, cfg: dict, clip: dict) -> None:
         spike = db.one("SELECT * FROM spikes WHERE id = ?", (clip["spike_id"],)) if clip["spike_id"] else None
         terms = (spike["top_terms"].split(",") if spike and spike["top_terms"] else [])
         sample = json.loads(spike["sample"]) if spike and spike["sample"] else []
-        meta = metadata.generate(cfg, ch, camp, captions.transcript_text(words), terms, sample)
+        meta = metadata.generate(cfg, ch, camp, captions.transcript_text(words), terms, sample,
+                                 context=clip.get("source_note") or "")
         db.update(
             "clips", clip_id,
             hook=meta.hook, title=meta.title, caption=meta.caption,
@@ -149,7 +150,8 @@ def gemini_review(db: DB, cfg: dict, clip_id: int) -> bool:
         gem = gemini.review(cfg, Path(row["final_path"]),
                             streamer=ch.get("display_name") or row["channel"],
                             hook=(row.get("hook") or "").strip(), transcript=row.get("transcript") or "",
-                            chat_terms=(spike["top_terms"].split(",") if spike and spike["top_terms"] else []))
+                            chat_terms=(spike["top_terms"].split(",") if spike and spike["top_terms"]
+                                        else [row["source_note"]] if row.get("source_note") else []))
     except Exception as exc:  # network, quota, parse: keep Claude's verdict
         log.warning("clip %s: gemini review failed: %s", clip_id, exc)
         notes["gemini_error"] = str(exc)[:200]

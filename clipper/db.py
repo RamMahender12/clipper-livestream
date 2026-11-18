@@ -84,6 +84,7 @@ MIGRATIONS: dict[str, list[tuple[str, str]]] = {
         ("decided_at", "REAL"),
         ("auto_checked_at", "REAL"),
         ("expected_views", "INTEGER DEFAULT 0"),
+        ("source_note", "TEXT DEFAULT ''"),  # e.g. "Twitch viewers clipped this ... (312 views)"
     ],
     "posts": [
         ("account", "TEXT DEFAULT ''"),  # which page posted it (per-streamer accounts)

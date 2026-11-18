@@ -129,6 +129,7 @@ def generate(
     transcript: str,
     top_terms: list[str],
     chat_sample: list[str],
+    context: str = "",
 ) -> ClipMeta:
     ai = cfg["ai"]
     rules = "none (unpaid)"
@@ -147,6 +148,7 @@ def generate(
         f"Credit line (put it in the caption exactly): {_credit_line(channel_cfg)}\n"
         f"Campaign rules: {rules}\n"
         f"Chat was spamming: {', '.join(top_terms) or 'n/a'}\n"
+        f"{('How this moment was found: ' + context + chr(10)) if context else ''}"
         f"Sample chat lines: {json.dumps(chat_sample[:10])}\n"
         f"Transcript:\n<transcript>\n{transcript.strip() or '(no speech detected)'}\n</transcript>"
     )

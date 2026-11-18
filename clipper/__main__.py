@@ -16,6 +16,7 @@
   clipper telegram setup|test [--review]  connect the alerts bot (or the review bot)
   clipper campaigns            check for new GTA 6 campaigns now (Telegram alert)
   clipper gemini-review        have Gemini watch clips already waiting
+  clipper twitch-clips         harvest the most-viewed Twitch viewer clips now
   clipper service install|status|restart|stop|start|uninstall
                                run unattended in the background (macOS launchd)
 """
@@ -114,7 +115,10 @@ def cmd_doctor(args, cfg) -> int:
     if sys.platform == "darwin":
         print(f"  [{'ok' if st['state'] in ('running', 'active') else '--'}] background service: "
               f"{'installed, ' + st['state'] if st['installed'] else 'not installed (clipper service install)'}")
-    from . import gemini as _gemini
+    from . import gemini as _gemini, twitch_clips as _tc
+
+    print(f"  [{'ok' if _tc.configured() else '--'}] Twitch viewer clips"
+          f"{'' if _tc.configured() else ' - set TWITCH_CLIENT_ID / TWITCH_CLIENT_SECRET'}")
 
     print(f"  [{'ok' if _gemini.configured(cfg) else '--'}] Gemini video reviewer"
           f"{' (' + cfg['gemini']['model'] + ' via ' + cfg['gemini'].get('backend', 'vertex') + ')' if _gemini.configured(cfg) else ' - not set up (secrets/vertex_sa.json)'}")
@@ -224,6 +228,14 @@ def cmd_run(args, cfg, review_only: bool = False) -> int:
             log.info("Telegram review bot ON")
         else:
             log.info("Telegram review bot off: not set up (clipper telegram setup --review)")
+    if not review_only and not args.no_watch and cfg["twitch_clips"].get("enabled"):
+        from . import twitch_clips
+
+        if twitch_clips.configured():
+            twitch_clips.ClipHarvester(db, cfg, stop).start()
+            log.info("Twitch viewer-clip harvesting ON (every %s min)", cfg["twitch_clips"]["interval_minutes"])
+        else:
+            log.info("Twitch viewer clips off: set TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET")
     if not review_only and cfg["campaign_watch"].get("enabled"):
         from . import notify
         from .campaign_watch import CampaignWatcher
@@ -381,6 +393,18 @@ def cmd_gemini_review(args, cfg) -> int:
                               if ok else f"failed ({n.get('gemini_error', '')})"))
         if ok:  # let the auto-approver look again with the new verdict
             db.execute("UPDATE clips SET auto_checked_at = NULL WHERE id = ?", (cid,))
+    return 0
+
+
+def cmd_twitch_clips(args, cfg) -> int:
+    """Harvest viewer clips now (runs every few minutes inside `clipper run`)."""
+    from . import twitch_clips
+
+    if not twitch_clips.configured():
+        print("Add TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET to secrets/clipper.env first.")
+        return 1
+    for line in twitch_clips.harvest_once(open_db(cfg), cfg) or ["no new viewer clips above the view threshold"]:
+        print(line)
     return 0
 
 
@@ -566,6 +590,7 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--refresh", action="store_true")
     sub.add_parser("launch-times")
     sub.add_parser("campaigns", help="check for new Content Rewards campaigns now")
+    sub.add_parser("twitch-clips", help="harvest the most-viewed Twitch viewer clips now")
     gr = sub.add_parser("gemini-review", help="have Gemini watch clips already waiting")
     gr.add_argument("--limit", type=int, default=50)
     sv = sub.add_parser("service")
@@ -594,6 +619,7 @@ def main(argv: list[str] | None = None) -> int:
         "auth": cmd_auth, "autoreview": cmd_autoreview, "service": cmd_service,
         "instagram-accounts": cmd_instagram_accounts, "telegram": cmd_telegram,
         "campaigns": cmd_campaigns, "gemini-review": cmd_gemini_review,
+        "twitch-clips": cmd_twitch_clips,
     }
     if args.cmd == "review":
         args.no_watch = args.no_post = True

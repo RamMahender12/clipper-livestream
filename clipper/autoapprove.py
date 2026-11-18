@@ -253,6 +253,7 @@ def judge_clip(cfg: dict, clip: dict, notes: dict, ch: dict | None, camp: dict |
         f"Packaging AI quality score: {clip.get('quality')}/10; spoiler risk: {clip.get('spoiler_risk')}\n"
         f"Chat reaction: {spike_terms or 'n/a'} (spike score {float(clip.get('score') or 0):.1f})\n"
         f"{_gemini_line(notes)}"
+        f"{('How it was found: ' + clip['source_note'] + chr(10)) if clip.get('source_note') else ''}"
         f"Campaign brief: {brief}\n"
         f"Transcript:\n<transcript>\n{(clip.get('transcript') or '').strip() or '(no speech)'}\n</transcript>\n\n"
         f"This page's history ({est.n} posts with mature view data):\n"

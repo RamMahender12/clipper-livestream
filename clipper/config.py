@@ -97,6 +97,15 @@ DEFAULTS: dict = {
         "push_every_seconds": 60,
         "dashboard_url": "https://gta6clipper.dawnlights.in/",
     },
+    "twitch_clips": {
+        "enabled": True,  # harvest the most-viewed viewer clips (needs TWITCH_CLIENT_ID/SECRET)
+        "interval_minutes": 10,
+        "lookback_hours": 3,
+        "per_poll": 3,  # new viewer clips queued per streamer per poll
+        "min_views": 10,  # ignore viewer clips with fewer views
+        "dedupe_seconds": 30,  # skip if we already cut a clip within this many seconds
+        "max_seconds": 60,
+    },
     "campaign_watch": {
         "enabled": True,  # Telegram alert when a new matching Content Rewards campaign appears
         "interval_minutes": 20,

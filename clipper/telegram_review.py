@@ -149,6 +149,8 @@ def caption_for(cfg: dict, clip: dict, kind: str) -> str:
     if kind == "auto":
         veto = int(cfg.get("auto_approve", {}).get("veto_minutes", 10))
         lines.append(f"Auto-approved: posts in about {veto} min unless you undo.")
+    if clip.get("source_note"):
+        lines.append(clip["source_note"][:200])
     lines.append(f"Hook: {clip.get('hook', '').strip()}")
     lines.append(f"Caption: {(clip.get('caption') or '').strip()[:350]}")
     if gem.get("what_happens"):
