@@ -71,11 +71,31 @@ class AutoPostTests(unittest.TestCase):
         self.assertEqual((acct, acfg["instagram"]["ig_user_id"]), ("178", "178"))
         self.assertNotEqual(self.cfg["instagram"].get("ig_user_id"), "178")  # original untouched
 
+    def test_paused_account_is_skipped_until_resumed(self):
+        from clipper import takedowns
+        self.clip("lacy", 1)
+        c1 = self.clip("clix", 1)
+        lacy_account = publishers.channel_account(self.cfg, self.cfg["channels"][0], "youtube")
+        takedowns._schema(self.db)
+        self.db.execute("INSERT INTO paused_accounts (account, platform, channel, reason, paused_at) VALUES (?, ?, ?, ?, ?)",
+                        (lacy_account, "youtube", "lacy", "removed: gone", time.time()))
+        with mock.patch.dict(publishers._REGISTRY, {"youtube": FakeYouTube}), \
+                mock.patch("clipper.submit_tracker.send_batch", return_value=True):
+            lines = scheduler.post_once(self.db, self.cfg)
+        self.assertEqual([cid for _, cid, _ in FakeYouTube.calls], [c1])  # only Clix posted
+        self.assertTrue(any("paused after a takedown" in l for l in lines))
+        takedowns.resume(self.db, lacy_account)
+        with mock.patch.dict(publishers._REGISTRY, {"youtube": FakeYouTube}), \
+                mock.patch("clipper.submit_tracker.send_batch", return_value=True):
+            scheduler.post_once(self.db, self.cfg)
+        self.assertEqual(len(FakeYouTube.calls), 2)  # LACY posts again
+
     def test_each_streamer_posts_to_its_own_account_and_alerts(self):
         l1, l2, c1 = self.clip("lacy", 1), self.clip("lacy", 2), self.clip("clix", 1)
         sent = []
         with mock.patch.dict(publishers._REGISTRY, {"youtube": FakeYouTube}), \
-                mock.patch.object(notify, "send", side_effect=lambda t: sent.append(t) or True):
+                mock.patch("clipper.submit_tracker.send_batch",
+                           side_effect=lambda cfg, db, posted, failed: sent.append(notify.batch_message(cfg, posted, failed)) or True):
             scheduler.post_once(self.db, self.cfg)
         tokens = {Path(t).name: cid for t, cid, _ in FakeYouTube.calls}
         self.assertEqual(set(tokens), {"youtube_lacy.json", "youtube_clix.json"})  # one per account
@@ -91,7 +111,7 @@ class AutoPostTests(unittest.TestCase):
         self.assertEqual(statuses[c1], "posted")
         # second pass: lacy's account is inside its 60-min gap, so the 2nd lacy clip waits
         with mock.patch.dict(publishers._REGISTRY, {"youtube": FakeYouTube}), \
-                mock.patch.object(notify, "send", return_value=True):
+                mock.patch("clipper.submit_tracker.send_batch", return_value=True):
             lines = scheduler.post_once(self.db, self.cfg)
         self.assertEqual(len(FakeYouTube.calls), 2)
         self.assertTrue(any("next slot" in l for l in lines))

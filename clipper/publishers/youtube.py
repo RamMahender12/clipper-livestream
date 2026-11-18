@@ -395,6 +395,31 @@ class YouTubePublisher(Publisher):
             log.warning("youtube stats %s failed: %s", remote_id, exc)
             return None
 
+    def check_status(self, remote_id: str) -> tuple[str, str]:
+        """Is the Short still up? Removed (missing), rejected (with YouTube's reason), blocked in some
+        countries (usually a music claim), or age-restricted."""
+        try:
+            query = urllib.parse.urlencode({"part": "status,contentDetails", "id": remote_id})
+            status, _, body = _request("GET", f"{API_URL}/videos?{query}", headers={
+                "Authorization": f"Bearer {_access_token(self.cfg)}"})
+        except Exception as exc:
+            return "unknown", str(exc)[:150]
+        if status != 200:
+            return "unknown", _error_text(status, body)[:150]
+        items = json.loads(body).get("items") or []
+        if not items:
+            return "removed", "the video no longer exists on YouTube (deleted or taken down)"
+        st, cd = items[0].get("status", {}), items[0].get("contentDetails", {})
+        if st.get("uploadStatus") in ("rejected", "deleted", "failed"):
+            why = st.get("rejectionReason") or st.get("failureReason") or st.get("uploadStatus")
+            return "rejected", f"YouTube {st.get('uploadStatus')} it: {why}"
+        blocked = (cd.get("regionRestriction") or {}).get("blocked") or []
+        if blocked:
+            return "blocked", f"blocked in {len(blocked)} countries (usually a music or Content ID claim)"
+        if (cd.get("contentRating") or {}).get("ytRating") == "ytAgeRestricted":
+            return "age", "age-restricted by YouTube"
+        return "ok", ""
+
     # -- internals
 
     def _publish(self, video: Path, meta: PostMeta) -> str:

@@ -77,6 +77,9 @@ DEFAULTS: dict = {
     },
     "review": {"host": "127.0.0.1", "port": 8765},
     "posting": {
+        "submit_minutes": 30,  # Content Rewards: submit each post link within this long
+        "remind_after_minutes": 20,  # Telegram reminder if the ✅ button isn't tapped by then
+        "takedown_check_hours": 3,  # check every post for takedowns this often (pauses the account on one)
         "platforms": ["export"],
         "min_gap_minutes": 45,
         "max_posts_per_day": {"youtube": 10, "instagram": 8, "tiktok": 5, "export": 1000},

@@ -228,6 +228,19 @@ class InstagramPublisher(Publisher):
             log.warning("instagram stats %s failed: %s", remote_id, exc)
             return None
 
+    def check_status(self, remote_id: str) -> tuple[str, str]:
+        """Is the reel still up? Instagram's API only shows whether it exists."""
+        url = (f"{GRAPH_HOST}/{self._version()}/{remote_id}?"
+               f"{urllib.parse.urlencode({'fields': 'id', 'access_token': self._token()})}")
+        try:
+            _call("GET", url, timeout=30)
+            return "ok", ""
+        except _ApiError as exc:
+            text = str(exc)
+            if "code 100/33" in text or "does not exist" in text.lower():
+                return "removed", "the reel no longer exists on Instagram (deleted or taken down)"
+            return "unknown", text[:150]
+
     # -- internals
 
     def _fail(self, msg: str) -> PostResult:

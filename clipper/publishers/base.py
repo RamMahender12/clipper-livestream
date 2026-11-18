@@ -52,6 +52,10 @@ class Publisher:
     def fetch_stats(self, remote_id: str) -> PostStats | None:
         return None
 
+    def check_status(self, remote_id: str) -> tuple[str, str]:
+        """(state, detail) of a live post: ok, removed, rejected, blocked, age, or unknown."""
+        return "unknown", "not supported for this platform"
+
 
 def caption_with_tags(meta: PostMeta, limit: int = 2200) -> str:
     text = meta.caption.strip()

@@ -18,6 +18,8 @@
   clipper gemini-review        have Gemini watch clips already waiting
   clipper twitch-clips         harvest the most-viewed Twitch viewer clips now
   clipper instagram-tokens     make non-expiring Instagram Page tokens, check all tokens
+  clipper takedowns            check every post for takedowns now
+  clipper resume <who> <where> post to an account again after a takedown pause
   clipper service install|status|restart|stop|start|uninstall
                                run unattended in the background (macOS launchd)
 """
@@ -191,7 +193,7 @@ def _install_signals(stop: threading.Event) -> None:
 
 
 def cmd_run(args, cfg, review_only: bool = False) -> int:
-    from . import recorder, review_server, scheduler, service, watcher
+    from . import notify, recorder, review_server, scheduler, service, watcher
 
     host, port = cfg["review"]["host"], int(cfg["review"]["port"])
     if service.port_in_use(host, port):
@@ -221,6 +223,16 @@ def cmd_run(args, cfg, review_only: bool = False) -> int:
         pipeline.RenderWorker(db, cfg, stop, i).start()
     if not review_only and not args.no_post:
         scheduler.Scheduler(db, cfg, stop).start()
+        from .takedowns import TakedownWatcher
+
+        TakedownWatcher(db, cfg, stop).start()
+        log.info("takedown watcher ON (every %s h; pauses an account after a takedown)",
+                 cfg["posting"].get("takedown_check_hours", 3))
+        if notify.configured():
+            from .submit_tracker import SubmitTracker
+
+            SubmitTracker(db, cfg, stop).start()
+            log.info("submit tracker ON (✅ button, reminder at %s min)", cfg["posting"].get("remind_after_minutes", 20))
     if not review_only and cfg["review_bot"].get("enabled"):
         from . import telegram_review
 
@@ -378,6 +390,29 @@ def cmd_instagram_tokens(args, cfg) -> int:
     for w in warnings:
         print("WARNING:", w)
     return 1 if warnings else 0
+
+
+def cmd_takedowns(args, cfg) -> int:
+    """Check every post for takedowns now (runs every few hours inside `clipper run`)."""
+    from . import takedowns
+
+    db = open_db(cfg)
+    lines = takedowns.run_once(db, cfg)
+    for line in lines or ["no new takedowns, blocks or age restrictions"]:
+        print(line)
+    takedowns._schema(db)
+    for r in db.query("SELECT * FROM paused_accounts"):
+        print(f"PAUSED: {r['channel']} {r['platform']}: {r['reason']}")
+    return 0
+
+
+def cmd_resume(args, cfg) -> int:
+    """Post to an account again after you've checked its takedown."""
+    from . import takedowns
+
+    msg = takedowns.resume_channel(cfg, open_db(cfg), args.channel, args.platform)
+    print(msg[:1].upper() + msg[1:] + ".")
+    return 1 if msg.startswith("no ") else 0
 
 
 def cmd_campaigns(args, cfg) -> int:
@@ -613,6 +648,10 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("campaigns", help="check for new Content Rewards campaigns now")
     sub.add_parser("twitch-clips", help="harvest the most-viewed Twitch viewer clips now")
     sub.add_parser("instagram-tokens", help="make non-expiring Instagram Page tokens and check all tokens")
+    sub.add_parser("takedowns", help="check every post for takedowns now")
+    p_resume = sub.add_parser("resume", help="post to an account again after a takedown pause")
+    p_resume.add_argument("channel", help="streamer login, e.g. lacy")
+    p_resume.add_argument("platform", choices=["youtube", "instagram"])
     gr = sub.add_parser("gemini-review", help="have Gemini watch clips already waiting")
     gr.add_argument("--limit", type=int, default=50)
     sv = sub.add_parser("service")
@@ -642,6 +681,7 @@ def main(argv: list[str] | None = None) -> int:
         "instagram-accounts": cmd_instagram_accounts, "telegram": cmd_telegram,
         "campaigns": cmd_campaigns, "gemini-review": cmd_gemini_review,
         "twitch-clips": cmd_twitch_clips, "instagram-tokens": cmd_instagram_tokens,
+        "takedowns": cmd_takedowns, "resume": cmd_resume,
     }
     if args.cmd == "review":
         args.no_watch = args.no_post = True

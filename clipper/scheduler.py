@@ -55,6 +55,11 @@ def post_once(db: DB, cfg: dict) -> list[str]:
             account = channel_account(cfg, ch, platform)
             if not account or account in used or account in blocked:
                 continue
+            from . import takedowns
+
+            if why := takedowns.paused(db, account):
+                blocked[account] = f"{platform}/{clip['channel']}: paused after a takedown ({why[:80]})"
+                continue
             ok, why = guardrails.pacing_ok(cfg, db, platform, account=account)
             if not ok:
                 blocked[account] = why
@@ -97,7 +102,9 @@ def post_once(db: DB, cfg: dict) -> list[str]:
         log_lines.extend(blocked.values())
     _mark_fully_posted(db, cfg)
     if posted or failed:
-        notify.send(notify.batch_message(cfg, posted, failed))
+        from . import submit_tracker
+
+        submit_tracker.send_batch(cfg, db, posted, failed)  # links + a ✅ Submitted button per campaign
     return log_lines
 
 
