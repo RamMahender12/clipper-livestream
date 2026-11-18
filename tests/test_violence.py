@@ -88,6 +88,8 @@ class MusicTests(unittest.TestCase):
         speech, music = captions.split_markers(words)
         self.assertEqual([w.text for w in speech], ["I", "need", "bro"])
         self.assertEqual(music, [(25.86, 29.3)])  # merged across the 1.5 s gap, crickets aren't music
+        glued = [W(0, 0.4, "(dramatic"), W(0.4, 0.9, "music)-"), W(1.0, 1.3, "Did"), W(1.3, 1.6, "you")]
+        self.assertEqual([w.text for w in captions.split_markers(glued)[0]], ["Did", "you"])
         unclosed = [W(0, 1, "(this"), *[W(i, i + 0.5, f"w{i}") for i in range(1, 9)]]
         self.assertEqual(len(captions.split_markers(unclosed)[0]), 8)  # a stray "(" doesn't eat the speech
         data = {"transcription": [{"offsets": {"from": 0, "to": 400}, "text": " (UPBEAT"},

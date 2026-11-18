@@ -102,7 +102,7 @@ def split_markers(words: list[Word], merge_gap: float = 1.5) -> tuple[list[Word]
             speech.append(w)
             continue
         text = " ".join(g.text for g in group)
-        if text.rstrip(".,!?;:")[-1:] in "])":
+        if re.search(r"[\])]", w.text):  # closed, even with punctuation glued on: "music)-"
             if _MUSIC.search(text):
                 music.append((group[0].start, group[-1].end))
             group = []
