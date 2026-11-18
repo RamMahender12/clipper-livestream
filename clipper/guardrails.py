@@ -119,8 +119,12 @@ def auto_gate(cfg: dict, channel_cfg: dict | None, clip: dict, notes: dict) -> t
     if gem.get("hook_matches") is False:
         return False, f"{name} says the hook doesn't match the video"
     if gem:
-        if "age_risk" not in gem:
-            return False, "needs a fresh video check (age-restriction and game checks)"
+        if "age_risk" not in gem or "violence" not in gem:
+            return False, "needs a fresh video check (age-restriction, violence and game checks)"
+        if notes.get("violence_mostly"):
+            return False, "mostly violence: nothing clean enough to keep"
+        if gem.get("violence"):
+            return False, "still shows violence: " + "; ".join(str(v[2]) for v in gem["violence"][:2])
         if gem.get("is_gta6") is False:
             return False, f"{name} doesn't think this is GTA 6 gameplay"
         if gem.get("streamer_featured") is False:

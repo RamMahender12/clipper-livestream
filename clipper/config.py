@@ -95,7 +95,7 @@ DEFAULTS: dict = {
         # backend "claude": Claude looks at frames sampled from the clip (no Google account needed)
         "claude_model": "claude-sonnet-5-5",
         "claude_effort": "medium",
-        "frames": 8,
+        "frames": 12,
         "frame_width": 432,
         # breaker: stop calling a failing reviewer instead of hammering it (alerts once on Telegram)
         "max_per_hour": 60,
@@ -103,9 +103,18 @@ DEFAULTS: dict = {
         "pause_minutes": 30,  # ...for this long
         "policy_pause_hours": 6,  # a policy/permission rejection (HTTP 401/403) pauses it this long
     },
+    "violence": {
+        # the video check marks moments where a person or animal is attacked, shot, beaten or killed,
+        # or blood shows; they're cut out (keeping the longest clean stretch), re-rendered and re-checked
+        "cut": True,
+        "pad_seconds": 1.5,  # extra trimmed around each moment (frames are a couple of seconds apart)
+        "min_keep_seconds": 6,  # a clean stretch shorter than this means the clip is mostly violence...
+        "min_keep_share": 0.4,  # ...as does keeping less than this share of it: such clips are dropped
+    },
     "review_bot": {
         "enabled": True,  # approve/reject clips from Telegram (needs TELEGRAM_REVIEW_* secrets)
         "max_per_hour": 12,  # clips sent for review per hour (respects quiet hours)
+        "min_quality": 6,  # only held clips at least this good are sent to you; auto-approvals always are
         "per_push": 3,  # clips sent per minute while catching up
         "push_every_seconds": 60,
         "dashboard_url": "https://gta6clipper.dawnlights.in/",

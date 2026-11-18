@@ -98,10 +98,81 @@ def process_clip(db: DB, cfg: dict, clip: dict) -> None:
     # 3. captions + render, then Gemini watches the result
     render_final(db, cfg, clip_id, ch, src, start, dur, words, hook)
     gemini_review(db, cfg, clip_id)  # second opinion on the finished video
-    if not clip["hook"]:  # our own hook (never one you wrote): fix it if Gemini says it misleads
+    if cut_violence(db, cfg, clip_id) == "mostly":
+        db.update("clips", clip_id, status="rejected", decided_by="auto", decided_at=time.time(),
+                  decision_note="Dropped: mostly violence (YouTube age-restricts it), nothing clean enough to keep")
+        log.info("clip %s dropped: mostly violence", clip_id)
+        return
+    if not clip["hook"]:  # our own hook (never one you wrote): fix it if the video check says it misleads
         swap_hook(db, cfg, clip_id)
     db.update("clips", clip_id, status="ready")
     log.info("clip %s ready", clip_id)
+
+
+def clean_window(duration: float, spans: list, pad: float) -> tuple[float, float]:
+    """The longest stretch of [0, duration] that avoids every (padded) violent span."""
+    bad = sorted((max(0.0, a - pad), min(duration, b + pad)) for a, b, *_ in spans)
+    best, cursor = (0.0, 0.0), 0.0
+    for a, b in bad:
+        if a - cursor > best[1] - best[0]:
+            best = (cursor, a)
+        cursor = max(cursor, b)
+    if duration - cursor > best[1] - best[0]:
+        best = (cursor, duration)
+    return round(best[0], 2), round(best[1], 2)
+
+
+def cut_violence(db: DB, cfg: dict, clip_id: int) -> str:
+    """Trim violent moments out: keep the longest clean stretch, re-render it and check it again.
+    Returns "" (nothing to do), "cut", or "mostly" (too little left: drop the clip). Once per clip;
+    never touches a clip you decided on."""
+    vcfg = cfg.get("violence", {})
+    if not vcfg.get("cut", True):
+        return ""
+    row = dict(db.one("SELECT * FROM clips WHERE id = ?", (clip_id,)))
+    try:
+        notes = json.loads(row.get("ai_notes") or "{}")
+    except json.JSONDecodeError:
+        return ""
+    spans = (notes.get("gemini") or {}).get("violence") or []
+    if not spans or notes.get("violence_cut") or row.get("decided_by") == "human":
+        return ""
+    dur = float(row.get("duration_s") or 30)
+    a, b = clean_window(dur, spans, float(vcfg.get("pad_seconds", 1.5)))
+    keep = b - a
+    if keep < max(float(vcfg.get("min_keep_seconds", 6)), float(vcfg.get("min_keep_share", 0.4)) * dur):
+        notes["violence_mostly"] = True
+        db.update("clips", clip_id, ai_notes=json.dumps(notes))
+        return "mostly"
+    if not row.get("source") or not Path(row["source"]).exists():
+        return ""
+    words = [captions.Word(**w) for w in json.loads(row.get("words_json") or "[]")]
+    kept = [captions.Word(round(w.start - a, 3), round(w.end - a, 3), w.text) for w in words if w.end > a and w.start < b]
+    before = {k: row[k] for k in ("start_s", "duration_s", "words_json", "transcript", "final_path")}
+    first = Path(row["final_path"]) if row.get("final_path") else None
+    backup = first.with_name("final.uncut.mp4") if first and first.exists() else None
+    if backup:
+        first.replace(backup)
+    notes["violence_cut"] = {"removed": spans, "kept": [a, b], "was": round(dur, 2)}
+    db.update("clips", clip_id, start_s=float(row["start_s"] or 0) + a, duration_s=round(keep, 2),
+              words_json=json.dumps([w.__dict__ for w in kept]), transcript=captions.transcript_text(kept),
+              ai_notes=json.dumps(notes))
+    ch = config_mod.channel(cfg, row["channel"]) or {"login": row["channel"]}
+    try:
+        render_final(db, cfg, clip_id, ch, Path(row["source"]), float(row["start_s"] or 0) + a, keep, kept,
+                     (row.get("hook") or "").strip())
+    except Exception as exc:  # keep the uncut render, held for you
+        log.warning("clip %s: re-render without the violence failed: %s", clip_id, exc)
+        if backup:
+            backup.replace(first)
+        notes.pop("violence_cut")
+        db.update("clips", clip_id, ai_notes=json.dumps(notes), **before)
+        return ""
+    if backup:
+        backup.unlink(missing_ok=True)
+    gemini_review(db, cfg, clip_id)  # is it clean now, and does the hook still fit?
+    log.info("clip %s: cut violence, kept %.1f-%.1fs of %.1fs", clip_id, a, b, dur)
+    return "cut"
 
 
 def render_final(db: DB, cfg: dict, clip_id: int, ch: dict, src: Path, start: float, dur: float,

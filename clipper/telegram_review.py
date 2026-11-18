@@ -97,7 +97,15 @@ def reviewable(cfg: dict, clip: dict) -> bool:
     kind, _ = guardrails.permission(ch)
     if kind in (None, "test") or not clip.get("final_path"):
         return False
-    if clip.get("spoiler_risk") == "high" or _notes(clip).get("unsafe"):
+    notes = _notes(clip)
+    gem = notes.get("gemini") or {}
+    if clip.get("spoiler_risk") == "high" or notes.get("unsafe"):
+        return False
+    # hard no's never reach the phone: they'd be age-restricted, off-game or mostly violence
+    if gem.get("age_risk") == "high" or gem.get("is_gta6") is False or notes.get("violence_mostly"):
+        return False
+    # only clips good enough to be worth your time; the rest stay on the dashboard
+    if int(clip.get("quality") or 0) < int(cfg.get("review_bot", {}).get("min_quality", 6)):
         return False
     if guardrails.before_release(cfg, clip):
         return False
@@ -154,6 +162,9 @@ def caption_for(cfg: dict, clip: dict, kind: str) -> str:
     if clip.get("source_note"):
         lines.append(clip["source_note"][:200])
     lines.append(f"Hook: {clip.get('hook', '').strip()}")
+    if notes.get("violence_cut"):
+        k = notes["violence_cut"].get("kept", [0, 0])
+        lines.append(f"✂️ Violence cut: kept {k[0]:.0f}-{k[1]:.0f}s of {notes['violence_cut'].get('was', 0):.0f}s")
     if notes.get("hook_swapped"):
         lines.append(f"({gemini_mod.label(gem)}'s hook; the first one, \"{notes['hook_swapped'].get('from', '')}\", "
                      "didn't match the video)")

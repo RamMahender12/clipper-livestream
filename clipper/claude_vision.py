@@ -28,6 +28,8 @@ def schema() -> dict:
     for prop in s["properties"].values():
         prop.pop("minimum", None)
         prop.pop("maximum", None)
+        if prop.get("type") == "array" and prop.get("items", {}).get("type") == "object":
+            prop["items"]["additionalProperties"] = False
     s["additionalProperties"] = False
     return s
 

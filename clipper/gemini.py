@@ -48,11 +48,15 @@ SCHEMA = {
         "age_restriction_reason": {"type": "string"},
         "is_gta6_gameplay": {"type": "boolean"},
         "streamer_featured": {"type": "boolean"},
+        "violent_moments": {"type": "array", "items": {
+            "type": "object",
+            "properties": {"from_s": {"type": "number"}, "to_s": {"type": "number"}, "what": {"type": "string"}},
+            "required": ["from_s", "to_s", "what"]}},
         "reason": {"type": "string"},
     },
     "required": ["what_happens", "visual_quality", "spoiler_risk", "is_cutscene", "unsafe",
                  "hook_matches", "better_hook", "age_restriction_risk", "age_restriction_reason",
-                 "is_gta6_gameplay", "streamer_featured", "reason"],
+                 "is_gta6_gameplay", "streamer_featured", "violent_moments", "reason"],
 }
 
 FIELDS = """- what_happens: 1-2 sentences describing what is visible and audible.
@@ -66,6 +70,7 @@ FIELDS = """- what_happens: 1-2 sentences describing what is visible and audible
 - age_restriction_reason: a few words on what would trigger it, or "".
 - is_gta6_gameplay: true only if this is gameplay footage from GTA 6 (Grand Theft Auto VI, set in Leonida / Vice City). false for another game (GTA V, Far Cry, RDR2...), or if the clip is mostly a menu, loading screen, the desktop or just the streamer with no game.
 - streamer_featured: true if the streamer is clearly part of the moment (their facecam is visible or their voice reacts to it), false if it is only game footage or someone else.
+- violent_moments: every stretch where a person or animal is attacked, shot, stabbed, beaten up or killed, or blood or gore is visible, as from_s/to_s in seconds from the start of the clip, plus a few words on what. Use the timestamps you can see; for a moment in a single frame, from_s = to_s. Car crashes, explosions where nobody is shown hurt, falls, police chases and a "wasted" screen on its own are not violence. [] if there is none.
 - reason: one sentence explaining your score."""
 
 CONTEXT = """Context: streamer {streamer}. On-screen hook: {hook!r}. Chat was spamming: {chat}. Transcript (auto-generated, may contain errors): {transcript!r}"""
@@ -341,6 +346,18 @@ def review(cfg: dict, video: Path, *, streamer: str, hook: str, transcript: str,
     return normalize(data, model)
 
 
+def _spans(items) -> list[list]:
+    out = []
+    for it in (items or [])[:12]:
+        try:
+            a, b = float(it.get("from_s", 0)), float(it.get("to_s", 0))
+        except (TypeError, ValueError, AttributeError):
+            continue
+        a, b = max(0.0, min(a, b)), max(0.0, max(a, b))
+        out.append([round(a, 2), round(b, 2), str(it.get("what", ""))[:80]])
+    return out
+
+
 def normalize(data: dict, model: str) -> dict:
     """One review shape for every backend."""
     risk = str(data.get("spoiler_risk", "")).lower()
@@ -356,6 +373,7 @@ def normalize(data: dict, model: str) -> dict:
         "age_reason": str(data.get("age_restriction_reason", ""))[:160],
         "is_gta6": data.get("is_gta6_gameplay") is not False,
         "streamer_featured": data.get("streamer_featured") is not False,
+        "violence": _spans(data.get("violent_moments")),
         "reason": str(data.get("reason", ""))[:300],
         "model": model,
     }

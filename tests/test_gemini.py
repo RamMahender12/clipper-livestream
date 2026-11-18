@@ -11,7 +11,7 @@ from clipper.db import DB
 
 GEM = {"quality": 8, "what_happens": "car flips into the river", "spoiler": "none", "cutscene": False,
        "unsafe": False, "hook_matches": True, "better_hook": "", "age_risk": "none", "age_reason": "",
-       "is_gta6": True, "streamer_featured": True, "reason": "chaos", "model": "gemini-3.8-flash"}
+       "is_gta6": True, "streamer_featured": True, "violence": [], "reason": "chaos", "model": "gemini-3.8-flash"}
 
 
 class CombineTests(unittest.TestCase):
@@ -122,7 +122,8 @@ class VertexTests(unittest.TestCase):
         answer = {"what_happens": "x", "visual_quality": 7, "spoiler_risk": "none", "is_cutscene": True,
                   "unsafe": False, "hook_matches": True, "better_hook": "", "age_restriction_risk": "HIGH",
                   "age_restriction_reason": "beating up close", "is_gta6_gameplay": False,
-                  "streamer_featured": True, "reason": "r"}
+                  "streamer_featured": True, "violent_moments": [{"from_s": 9, "to_s": 4.5, "what": "beating"},
+                                                                 {"oops": 1}], "reason": "r"}
         seen = {}
 
         class Resp:
@@ -155,6 +156,7 @@ class VertexTests(unittest.TestCase):
         self.assertEqual((out["quality"], out["cutscene"]), (7, True))
         self.assertEqual((out["age_risk"], out["age_reason"], out["is_gta6"], out["streamer_featured"]),
                          ("high", "beating up close", False, True))
+        self.assertEqual(out["violence"], [[4.5, 9.0, "beating"], [0.0, 0.0, ""]])
         self.assertFalse((self.tmp / "final.review.mp4").exists())  # preview copy removed
 
 

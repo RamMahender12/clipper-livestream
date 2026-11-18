@@ -96,6 +96,7 @@ async function load(){
         ${c.decision_note?`<div class="decision">${esc(c.decision_note)}</div>`:""}
         ${c.source_note?`<div class="note">🎬 ${esc(c.source_note)}</div>`:""}
         ${n.tiebreak?`<div class="note">⚖️ ${esc(n.tiebreak)}</div>`:""}
+        ${n.violence_cut?`<div class="note">✂️ Violence cut out: kept ${Number(n.violence_cut.kept[0]).toFixed(1)}–${Number(n.violence_cut.kept[1]).toFixed(1)}s of ${Number(n.violence_cut.was).toFixed(1)}s (${esc(n.violence_cut.removed.map(v=>v[2]).join("; "))})</div>`:""}
         ${n.hook_swapped?`<div class="note">✏️ Hook rewritten by ${vlabel(n.gemini)} after looking at the video (was: “${esc(n.hook_swapped.from)}”)</div>`:""}
         ${n.why?`<div class="note">${esc(n.why)}</div>`:""}
         ${n.gemini?`<div class="note"><b>${vlabel(n.gemini)} saw:</b> ${esc(n.gemini.what_happens)}${n.gemini.cutscene?" <b>(cutscene)</b>":""}${n.gemini.better_hook?`<br><b>${vlabel(n.gemini)} hook idea:</b> ${esc(n.gemini.better_hook)}`:""}</div>`:""}
