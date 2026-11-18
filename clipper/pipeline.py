@@ -360,6 +360,20 @@ def gemini_review(db: DB, cfg: dict, clip_id: int) -> bool:
     return True
 
 
+def drop_stale(db: DB, cfg: dict, now: float | None = None) -> int:
+    """Queued clips that waited too long are dropped instead of rendered: the queue renders the
+    best-scored first, so low scorers can wait for hours, and launch-week moments go stale."""
+    minutes = float(cfg["clip"].get("max_queue_minutes", 0))
+    if not minutes:
+        return 0
+    now = now or time.time()
+    return db.execute(
+        "UPDATE clips SET status = 'rejected', decided_by = 'auto', decided_at = ?, updated_at = ?, "
+        "decision_note = ? WHERE status = 'queued' AND created_at < ?",
+        (now, now, f"Stale: waited over {minutes:g} min to render while better clips went first",
+         now - minutes * 60)).rowcount
+
+
 class RenderWorker(threading.Thread):
     def __init__(self, db: DB, cfg: dict, stop: threading.Event, idx: int = 0):
         super().__init__(daemon=True, name=f"render-{idx}")
@@ -367,6 +381,8 @@ class RenderWorker(threading.Thread):
 
     def run(self) -> None:
         while not self.stop_event.is_set():
+            if dropped := drop_stale(self.db, self.cfg):
+                log.info("dropped %s stale queued clip(s)", dropped)
             row = self.db.claim_clip("queued", "rendering")
             if not row:
                 self.stop_event.wait(2)

@@ -50,6 +50,7 @@ DEFAULTS: dict = {
         "encoder": "libx264",  # libx264 | h264_videotoolbox
         "max_per_hour_per_channel": 12,
         "render_workers": 1,
+        "max_queue_minutes": 60,  # queued longer than this (live service): dropped, not rendered late
     },
     "captions": {
         "enabled": True,

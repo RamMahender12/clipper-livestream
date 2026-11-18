@@ -166,6 +166,25 @@ class WeakMomentTests(unittest.TestCase):
         self.assertEqual(db.one("SELECT status FROM clips WHERE id = ?", (viewer,))["status"], "ready")
 
 
+class StaleQueueTests(unittest.TestCase):
+    def test_old_queued_clips_are_dropped_not_rendered(self):
+        tmp = Path(tempfile.mkdtemp())
+        cfg = config_mod._merge(config_mod.DEFAULTS, {"paths": {"data_dir": str(tmp)}})
+        db = DB(tmp / "t.db")
+        now = time.time()
+        old = db.insert("clips", channel="lacy", status="queued", score=1.0, created_at=now - 61 * 60, updated_at=now)
+        fresh = db.insert("clips", channel="lacy", status="queued", score=1.0, created_at=now - 5 * 60, updated_at=now)
+        done = db.insert("clips", channel="lacy", status="ready", score=1.0, created_at=now - 300 * 60, updated_at=now)
+        self.assertEqual(pipeline.drop_stale(db, cfg, now), 1)
+        st = lambda i: dict(db.one("SELECT status, decision_note FROM clips WHERE id = ?", (i,)))
+        self.assertEqual(st(old)["status"], "rejected")
+        self.assertIn("Stale", st(old)["decision_note"])
+        self.assertEqual((st(fresh)["status"], st(done)["status"]), ("queued", "ready"))
+        cfg["clip"]["max_queue_minutes"] = 0  # off
+        db.update("clips", fresh, created_at=now - 999 * 60)
+        self.assertEqual(pipeline.drop_stale(db, cfg, now), 0)
+
+
 class PhoneFilterTests(unittest.TestCase):
     def test_only_good_clips_reach_the_phone(self):
         tmp = Path(tempfile.mkdtemp())
