@@ -170,7 +170,10 @@ class InstagramPublisher(Publisher):
         return self._ig.get("graph_version") or DEFAULT_VERSION
 
     def _token(self) -> str:
-        return os.environ.get(self._ig.get("access_token_env", "IG_ACCESS_TOKEN"), "").strip()
+        """This account's Page token (doesn't expire, see ig_tokens), else the user token."""
+        from .. import ig_tokens
+
+        return ig_tokens.token_for(self.cfg, str(self._ig.get("ig_user_id", "")).strip())
 
     def _get(self, path: str, **params) -> dict:
         params["access_token"] = self._token()

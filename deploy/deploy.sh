@@ -49,7 +49,7 @@ rsync -az --delete -e "ssh $SSH_OPTS" \
   "$ROOT/" "$HOST:$REMOTE/"
 rsync -az -e "ssh $SSH_OPTS" "$ROOT/config.toml" "$HOST:$REMOTE/config.toml"
 # (macOS's built-in openrsync has no --chmod, so lock the folder down afterwards)
-rsync -az -e "ssh $SSH_OPTS" --exclude dashboard.txt --exclude auth.caddy \
+rsync -az -e "ssh $SSH_OPTS" --exclude dashboard.txt --exclude auth.caddy --exclude instagram_tokens.json \
   "$ROOT/secrets/" "$HOST:$REMOTE/secrets/"
 ssh_ "chmod 700 $REMOTE/secrets && find $REMOTE/secrets -type f -exec chmod 600 {} +"
 

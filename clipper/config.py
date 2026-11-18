@@ -182,6 +182,9 @@ DEFAULTS: dict = {
         "access_token_env": "IG_ACCESS_TOKEN",
         "graph_version": "v27.0",
         "share_to_feed": True,
+        "tokens_file": "secrets/instagram_tokens.json",  # per-account Page tokens (made automatically)
+        "check_hours": 6,  # how often tokens are checked
+        "warn_days": 14,  # Telegram warning this long before anything needs you
     },
     "tiktok": {
         "client_key_env": "TIKTOK_CLIENT_KEY",

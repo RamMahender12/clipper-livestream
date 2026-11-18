@@ -17,6 +17,7 @@
   clipper campaigns            check for new GTA 6 campaigns now (Telegram alert)
   clipper gemini-review        have Gemini watch clips already waiting
   clipper twitch-clips         harvest the most-viewed Twitch viewer clips now
+  clipper instagram-tokens     make non-expiring Instagram Page tokens, check all tokens
   clipper service install|status|restart|stop|start|uninstall
                                run unattended in the background (macOS launchd)
 """
@@ -236,6 +237,11 @@ def cmd_run(args, cfg, review_only: bool = False) -> int:
             log.info("Twitch viewer-clip harvesting ON (every %s min)", cfg["twitch_clips"]["interval_minutes"])
         else:
             log.info("Twitch viewer clips off: set TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET")
+    if not review_only and "instagram" in cfg["posting"].get("platforms", []):
+        from .ig_tokens import TokenKeeper
+
+        TokenKeeper(cfg, stop).start()
+        log.info("Instagram token keeper ON (every %s h)", cfg["instagram"].get("check_hours", 6))
     if not review_only and cfg["campaign_watch"].get("enabled"):
         from . import notify
         from .campaign_watch import CampaignWatcher
@@ -359,6 +365,19 @@ def cmd_service(args, cfg) -> int:
           f"{', last exit ' + st['last_exit'] if st['last_exit'] else ''}")
     print(f"logs: {st['log']}  and  {config_mod.data_dir(cfg) / 'clipper.log'}")
     return 0
+
+
+def cmd_instagram_tokens(args, cfg) -> int:
+    """Make non-expiring Page tokens for each Instagram account and check every token now."""
+    from . import ig_tokens
+
+    lines = ig_tokens.make_page_tokens(cfg) if ig_tokens.user_token(cfg) else []
+    more, warnings = ig_tokens.check(cfg)
+    for line in lines + more:
+        print(line)
+    for w in warnings:
+        print("WARNING:", w)
+    return 1 if warnings else 0
 
 
 def cmd_campaigns(args, cfg) -> int:
@@ -591,6 +610,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("launch-times")
     sub.add_parser("campaigns", help="check for new Content Rewards campaigns now")
     sub.add_parser("twitch-clips", help="harvest the most-viewed Twitch viewer clips now")
+    sub.add_parser("instagram-tokens", help="make non-expiring Instagram Page tokens and check all tokens")
     gr = sub.add_parser("gemini-review", help="have Gemini watch clips already waiting")
     gr.add_argument("--limit", type=int, default=50)
     sv = sub.add_parser("service")
@@ -619,7 +639,7 @@ def main(argv: list[str] | None = None) -> int:
         "auth": cmd_auth, "autoreview": cmd_autoreview, "service": cmd_service,
         "instagram-accounts": cmd_instagram_accounts, "telegram": cmd_telegram,
         "campaigns": cmd_campaigns, "gemini-review": cmd_gemini_review,
-        "twitch-clips": cmd_twitch_clips,
+        "twitch-clips": cmd_twitch_clips, "instagram-tokens": cmd_instagram_tokens,
     }
     if args.cmd == "review":
         args.no_watch = args.no_post = True
