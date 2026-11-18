@@ -47,6 +47,18 @@ def campaign_for(cfg: dict, channel_cfg: dict | None) -> dict | None:
     return config_mod.campaign(cfg, detail) if kind == "campaign" else None
 
 
+def before_release(cfg: dict, clip: dict) -> str:
+    """Non-empty reason if a live clip was recorded before [posting].earliest_footage
+    (GTA 6's first official unlock). Rockstar takes down pre-release footage."""
+    cutoff = cfg.get("posting", {}).get("earliest_footage")
+    wall = clip.get("wall_start")
+    if not cutoff or wall is None:
+        return ""
+    if float(wall) < datetime.fromisoformat(cutoff).timestamp():
+        return f"recorded before {cutoff} (pre-release footage)"
+    return ""
+
+
 def can_post(cfg: dict, channel_cfg: dict | None, clip: dict, platform: str) -> tuple[bool, str]:
     kind, detail = permission(channel_cfg)
     if not kind:
@@ -55,6 +67,8 @@ def can_post(cfg: dict, channel_cfg: dict | None, clip: dict, platform: str) -> 
         return False, "test footage is never posted"
     if clip.get("status") != "approved":
         return False, "not approved by a human yet"
+    if why := before_release(cfg, clip):
+        return False, why
     if clip.get("spoiler_risk") == "high":
         return False, "flagged as a story spoiler"
     if clip.get("unsafe"):
@@ -81,6 +95,8 @@ def auto_gate(cfg: dict, channel_cfg: dict | None, clip: dict, notes: dict) -> t
         return False, "test footage is never posted"
     if not clip.get("final_path"):
         return False, "not rendered"
+    if why := before_release(cfg, clip):
+        return False, why
     if notes.get("source", "template") == "template":
         return False, "no AI spoiler/safety check (template packaging; set ANTHROPIC_API_KEY)"
     if notes.get("unsafe"):

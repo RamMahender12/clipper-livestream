@@ -54,8 +54,13 @@ class Publisher:
 
 
 def caption_with_tags(meta: PostMeta, limit: int = 2200) -> str:
-    tags = " ".join(t if t.startswith("#") else f"#{t}" for t in meta.hashtags)
     text = meta.caption.strip()
-    if tags and tags not in text:
-        text = f"{text}\n\n{tags}"
+    present = {w.lower() for w in text.split() if w.startswith("#")}
+    tags = []
+    for t in meta.hashtags:
+        tag = t if t.startswith("#") else f"#{t}"
+        if tag.lower() not in present and tag not in tags:  # skip tags already in the caption
+            tags.append(tag)
+    if tags:
+        text = f"{text}\n\n{' '.join(tags)}"
     return text[:limit]

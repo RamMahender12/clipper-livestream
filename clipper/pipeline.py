@@ -104,7 +104,7 @@ def process_clip(db: DB, cfg: dict, clip: dict) -> None:
             font=capcfg["font"], font_size=capcfg["font_size"],
             highlight=capcfg["highlight_color"], per_chunk=capcfg["words_per_chunk"],
             hook=hook, hook_seconds=capcfg["hook_seconds"],
-            credit=credit, duration=dur,
+            credit=credit if ch.get("credit_overlay", True) else "", duration=dur,
         )
         ass_path = out_dir / "captions.ass"
         ass_path.write_text(ass, encoding="utf-8")

@@ -71,6 +71,31 @@ def _credit_line(channel_cfg: dict) -> str:
     return f"Credit: {credit}"
 
 
+def required_tags(channel_cfg: dict, campaign: dict | None) -> list[str]:
+    """Hashtags the campaign or the channel's brief demands (without '#'), in order."""
+    out: list[str] = []
+    for t in list((campaign or {}).get("required_tags", [])) + list(channel_cfg.get("required_tags", [])):
+        if t.startswith("#") and t[1:] and t[1:] not in out:
+            out.append(t[1:])
+    return out
+
+
+def enforce_caption(caption: str, channel_cfg: dict) -> str:
+    """Append any text the brief says every caption must contain (e.g. the streamer's name)."""
+    for text in channel_cfg.get("caption_must_include", []):
+        if text and text not in caption:
+            caption = f"{caption}\n{text}"
+    return caption
+
+
+def _merge_tags(required: list[str], others: list[str], limit: int = 6) -> list[str]:
+    tags = list(required)
+    for t in others:
+        if t and t not in tags:
+            tags.append(t)
+    return tags[:max(limit, len(required))]
+
+
 def template_meta(channel_cfg: dict, campaign: dict | None, top_terms: list[str], transcript: str) -> ClipMeta:
     name = channel_cfg.get("display_name") or channel_cfg.get("login", "streamer")
     terms = {t.lower() for t in top_terms}
@@ -84,12 +109,12 @@ def template_meta(channel_cfg: dict, campaign: dict | None, top_terms: list[str]
         hook = f"{name} in GTA 6"
     disclosure = (campaign or {}).get("disclosure", "")
     lines = [disclosure, f"{name} on GTA 6 launch week", _credit_line(channel_cfg)]
-    tags = ["gta6", "gtavi", "gaming"] + [t.lstrip("#") for t in (campaign or {}).get("required_tags", []) if t.startswith("#")]
+    tags = _merge_tags(required_tags(channel_cfg, campaign), ["gta6", "gtavi", "gaming"])
     return ClipMeta(
         hook=hook,
         title=f"{name} in GTA 6"[:70],
-        caption="\n".join(l for l in lines if l),
-        hashtags=tags[:5],
+        caption=enforce_caption("\n".join(l for l in lines if l), channel_cfg),
+        hashtags=tags,
         take="",
         spoiler_risk="unknown",
         quality=3 if transcript.strip() else 1,
@@ -107,12 +132,14 @@ def generate(
 ) -> ClipMeta:
     ai = cfg["ai"]
     rules = "none (unpaid)"
-    if campaign:
+    req = required_tags(channel_cfg, campaign)
+    if campaign or req or channel_cfg.get("rules"):
         rules = json.dumps({
-            "campaign": campaign.get("name", campaign.get("id")),
-            "required_tags": campaign.get("required_tags", []),
-            "disclosure": campaign.get("disclosure", ""),
-            "notes": campaign.get("notes", ""),
+            "campaign": (campaign or {}).get("name", (campaign or {}).get("id", "")),
+            "required_tags": ["#" + t for t in req],
+            "caption_must_include": channel_cfg.get("caption_must_include", []),
+            "disclosure": (campaign or {}).get("disclosure", ""),
+            "notes": " ".join(filter(None, [(campaign or {}).get("notes", ""), channel_cfg.get("rules", "")])),
         })
     user = (
         f"Page: {ai.get('page_handle')} ({ai.get('niche')}). Voice: {ai.get('voice')}.\n"
@@ -138,15 +165,13 @@ def generate(
     disclosure = (campaign or {}).get("disclosure", "")
     if disclosure and disclosure not in caption:
         caption = f"{disclosure} {caption}"
-    tags = [t.lstrip("#").replace(" ", "") for t in data["hashtags"] if t.strip()]
-    for req in (campaign or {}).get("required_tags", []):
-        if req.startswith("#") and req.lstrip("#") not in tags:
-            tags.append(req.lstrip("#"))
+    caption = enforce_caption(caption, channel_cfg)
+    tags = _merge_tags(req, [t.lstrip("#").replace(" ", "") for t in data["hashtags"] if t.strip()])
     return ClipMeta(
         hook=data["hook"][:60],
         title=data["title"][:100],
         caption=caption,
-        hashtags=tags[:6],
+        hashtags=tags,
         take=data["take"],
         spoiler_risk=data["spoiler_risk"],
         unsafe=bool(data["unsafe"]),

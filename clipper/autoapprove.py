@@ -214,6 +214,15 @@ def _examples(history: list[PastClip], k: int) -> str:
     return "\n".join(out)
 
 
+def _posted_caption(clip: dict) -> str:
+    """The caption the platforms will actually get: caption plus stored hashtags."""
+    from .publishers.base import PostMeta, caption_with_tags
+
+    tags = [t for t in (clip.get("hashtags") or "").split(",") if t]
+    return caption_with_tags(PostMeta(title=clip.get("title") or "", caption=clip.get("caption") or "",
+                                      hashtags=tags))
+
+
 def judge_clip(cfg: dict, clip: dict, notes: dict, ch: dict | None, camp: dict | None,
                history: list[PastClip], est: Estimate) -> tuple[dict | None, str]:
     acfg = cfg["auto_approve"]
@@ -229,7 +238,7 @@ def judge_clip(cfg: dict, clip: dict, notes: dict, ch: dict | None, camp: dict |
         f"{float(clip.get('duration_s') or 0):.0f}s\n"
         f"Hook (on screen, first 3s): {clip.get('hook')!r}\n"
         f"Title: {clip.get('title')!r}\n"
-        f"Caption: {clip.get('caption')!r}\n"
+        f"Caption exactly as it will be posted (hashtags included): {_posted_caption(clip)!r}\n"
         f"What the packaging AI said the moment is: {notes.get('why', '')}\n"
         f"Packaging AI quality score: {clip.get('quality')}/10; spoiler risk: {clip.get('spoiler_risk')}\n"
         f"Chat reaction: {spike_terms or 'n/a'} (spike score {float(clip.get('score') or 0):.1f})\n"

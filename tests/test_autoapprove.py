@@ -105,6 +105,15 @@ class DecideTests(unittest.TestCase):
         self.assertEqual(self.d({**self.judge, "decision": "hold"}).action, "hold")
 
 
+class PostedCaptionTests(unittest.TestCase):
+    def test_reviewer_sees_hashtags_without_duplicates(self):
+        clip = {"caption": "LACY steals a cop car\n#LACY", "hashtags": "LACY,gta6,gaming", "title": "t"}
+        text = autoapprove._posted_caption(clip)
+        self.assertEqual(text.count("#LACY"), 1)
+        self.assertIn("#gta6", text)
+        self.assertIn("#gaming", text)
+
+
 class GateTests(unittest.TestCase):
     def setUp(self):
         self.cfg = make_cfg(tempfile.mkdtemp())

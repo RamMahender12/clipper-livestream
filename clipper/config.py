@@ -74,6 +74,8 @@ DEFAULTS: dict = {
         "max_posts_per_day": {"youtube": 10, "instagram": 8, "tiktok": 5, "export": 1000},
         "quiet_hours": [],  # e.g. [2, 3, 4, 5] local hours with no posting
         "timezone": "Asia/Kolkata",
+        # GTA 6's first official unlock (New Zealand). Live clips recorded earlier are never posted.
+        "earliest_footage": "2026-11-18T11:00:00+00:00",
     },
     "stats": {"refresh_minutes": 120},
     "auto_approve": {

@@ -147,6 +147,33 @@ class GuardrailTests(unittest.TestCase):
             self.assertIn("daily cap", guardrails.pacing_ok(self.cfg, db, "tiktok", now + 3600)[1])
 
 
+class LaunchGuardAndCaptionRuleTests(unittest.TestCase):
+    def test_pre_release_footage_is_blocked(self):
+        cfg = {"posting": {"earliest_footage": "2026-11-18T11:00:00+00:00"}, "campaigns": []}
+        ch = {"login": "lacy", "permission": "own"}
+        cutoff = 1794999600.0  # 2026-11-18T11:00:00Z
+        early = {"status": "approved", "spoiler_risk": "none", "wall_start": cutoff - 60}
+        late = {**early, "wall_start": cutoff + 60}
+        manual = {**early, "wall_start": None}  # ingested/manual cuts have no wall clock
+        self.assertFalse(guardrails.can_post(cfg, ch, early, "export")[0])
+        self.assertIn("pre-release", guardrails.can_post(cfg, ch, early, "export")[1])
+        self.assertTrue(guardrails.can_post(cfg, ch, late, "export")[0])
+        self.assertTrue(guardrails.can_post(cfg, ch, manual, "export")[0])
+
+    def test_channel_caption_rules(self):
+        from clipper import metadata
+
+        ch = {"login": "lacy", "display_name": "LACY", "credit": "twitch.tv/lacy",
+              "required_tags": ["#LACY"], "caption_must_include": ["LACY", "#LACY"]}
+        meta = metadata.template_meta(ch, None, ["kekw"], "hello")
+        self.assertEqual(meta.hashtags[0], "LACY")  # required tag first, never truncated away
+        self.assertIn("LACY", meta.caption)
+        self.assertIn("#LACY", meta.caption)
+        many = metadata._merge_tags(["LACY"], [f"t{i}" for i in range(10)])
+        self.assertEqual(many[0], "LACY")
+        self.assertEqual(len(many), 6)
+
+
 class SegmentTests(unittest.TestCase):
     def test_covering_and_closed(self):
         with tempfile.TemporaryDirectory() as tmp:
