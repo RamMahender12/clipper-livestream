@@ -108,14 +108,23 @@ def parse_insights(resp: dict) -> dict[str, int]:
 
 def _graph_error(status: int, body: bytes) -> _ApiError:
     try:
-        err = json.loads(body or b"{}").get("error") or {}
-    except (ValueError, AttributeError):
-        err = {}
-    msg = err.get("error_user_msg") or err.get("message") or "no details"
-    code = err.get("code", "")
+        payload = json.loads(body or b"{}")
+        if not isinstance(payload, dict):
+            payload = {}
+    except ValueError:
+        payload = {}
+    err = payload.get("error") or {}
+    # rupload.facebook.com (the video upload host) reports errors as
+    # {"debug_info": {"retriable": bool, "type": "...", "message": "..."}}
+    dbg = payload.get("debug_info") or {}
+    raw = (body or b"")[:200].decode("utf-8", "replace").strip()
+    msg = (err.get("error_user_msg") or err.get("message") or dbg.get("message")
+           or raw or "empty response")
+    code = err.get("code", "") or dbg.get("type", "")
     sub = f"/{err['error_subcode']}" if err.get("error_subcode") else ""
     # 9007 = "media is not ready for publishing yet": worth another try after a pause.
-    transient = bool(err.get("is_transient")) or status >= 500 or code in (1, 2, 4, 17, 32, 9007)
+    transient = (bool(err.get("is_transient")) or bool(dbg.get("retriable")) or status >= 500
+                 or code in (1, 2, 4, 17, 32, 9007) or (bool(dbg) and status in (400, 408, 429)))
     return _ApiError(f"Instagram HTTP {status} (code {code}{sub}): {msg}", transient)
 
 
@@ -142,6 +151,7 @@ def _with_retry(fn, attempts: int = 3):
         try:
             return fn()
         except _ApiError as exc:
+            log.warning("instagram attempt %d/%d failed: %s", i + 1, attempts, exc)
             if not exc.transient or i == attempts - 1:
                 raise
             time.sleep(5 * (i + 1))
@@ -231,15 +241,26 @@ class InstagramPublisher(Publisher):
         if used >= total:
             return self._fail(f"Instagram publishing limit reached ({used}/{total} in the last 24h)")
 
-        container = self._post(f"{ig_id}/media", retry=False,
-                               **instagram_container_params(meta, self._ig))
-        container_id = container.get("id")
-        upload_uri = container.get("uri") or (
-            f"{RUPLOAD_HOST}/ig-api-upload/{self._version()}/{container_id}")
-        if not container_id:
-            return self._fail("Instagram did not return a container id")
-
-        self._upload(upload_uri, video, size)
+        # A container accepts exactly one upload, so a failed upload is retried
+        # with a brand-new container rather than re-sending to the same one.
+        container_id = ""
+        for attempt in range(1, 4):
+            container = self._post(f"{ig_id}/media", retry=False,
+                                   **instagram_container_params(meta, self._ig))
+            container_id = container.get("id")
+            if not container_id:
+                return self._fail("Instagram did not return a container id")
+            upload_uri = container.get("uri") or (
+                f"{RUPLOAD_HOST}/ig-api-upload/{self._version()}/{container_id}")
+            try:
+                self._upload(upload_uri, video, size)
+                break
+            except _ApiError as exc:
+                log.warning("instagram upload attempt %d/3 failed (container %s): %s",
+                            attempt, container_id, exc)
+                if attempt == 3:
+                    raise
+                time.sleep(10 * attempt)
         self._wait_finished(container_id)
 
         published = self._post(f"{ig_id}/media_publish", creation_id=container_id)
@@ -264,7 +285,7 @@ class InstagramPublisher(Publisher):
                     "Content-Length": str(size),
                     "Content-Type": "application/octet-stream",
                 })
-        resp = _with_retry(attempt)
+        resp = attempt()  # one upload per container; _publish retries with a new container
         if resp.get("success") is False:
             raise _ApiError(f"Instagram upload rejected: {resp.get('message', '')}")
 
