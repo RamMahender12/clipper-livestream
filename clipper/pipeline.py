@@ -86,7 +86,10 @@ def process_clip(db: DB, cfg: dict, clip: dict) -> None:
             hashtags=",".join(meta.hashtags), spoiler_risk=meta.spoiler_risk,
             quality=meta.quality,
             ai_notes=json.dumps({"take": meta.take, "why": meta.why, "unsafe": meta.unsafe,
-                                 "source": meta.source}),
+                                 "source": meta.source,
+                                 # Claude's own verdict, kept apart from the combined one
+                                 "claude_quality": meta.quality, "claude_spoiler": meta.spoiler_risk,
+                                 "claude_unsafe": meta.unsafe}),
         )
         hook = meta.hook
     else:
@@ -120,8 +123,52 @@ def process_clip(db: DB, cfg: dict, clip: dict) -> None:
         render.thumbnail(final, out_dir / "thumb.jpg", at=min(1.5, dur / 2))
     except Exception:
         pass
-    db.update("clips", clip_id, final_path=str(final), status="ready", error="")
+    db.update("clips", clip_id, final_path=str(final), error="")
+    gemini_review(db, cfg, clip_id)  # second opinion on the finished video
+    db.update("clips", clip_id, status="ready")
     log.info("clip %s ready: %s", clip_id, final)
+
+
+def gemini_review(db: DB, cfg: dict, clip_id: int) -> bool:
+    """Have Gemini watch the rendered clip and merge its verdict with Claude's.
+    Never fails the clip: without Gemini, Claude's verdict stands."""
+    from . import gemini
+
+    if not gemini.configured(cfg):
+        return False
+    row = dict(db.one("SELECT * FROM clips WHERE id = ?", (clip_id,)))
+    if not row.get("final_path") or not Path(row["final_path"]).exists():
+        return False
+    try:
+        notes = json.loads(row.get("ai_notes") or "{}")
+    except json.JSONDecodeError:
+        notes = {}
+    ch = config_mod.channel(cfg, row["channel"]) or {"login": row["channel"]}
+    spike = db.one("SELECT top_terms FROM spikes WHERE id = ?", (row["spike_id"],)) if row.get("spike_id") else None
+    try:
+        gem = gemini.review(cfg, Path(row["final_path"]),
+                            streamer=ch.get("display_name") or row["channel"],
+                            hook=(row.get("hook") or "").strip(), transcript=row.get("transcript") or "",
+                            chat_terms=(spike["top_terms"].split(",") if spike and spike["top_terms"] else []))
+    except Exception as exc:  # network, quota, parse: keep Claude's verdict
+        log.warning("clip %s: gemini review failed: %s", clip_id, exc)
+        notes["gemini_error"] = str(exc)[:200]
+        db.update("clips", clip_id, ai_notes=json.dumps(notes))
+        return False
+    claude_q = int(notes.get("claude_quality", row.get("quality") or 0))
+    claude_spoiler = notes.get("claude_spoiler", row.get("spoiler_risk") or "unknown")
+    claude_unsafe = bool(notes.get("claude_unsafe", notes.get("unsafe", False)))
+    g = cfg["gemini"]
+    final = gemini.combine(claude_q, claude_spoiler, claude_unsafe, gem,
+                           weight=float(g.get("weight", 0.6)), disagree_points=int(g.get("disagree_points", 3)))
+    notes.update({"claude_quality": claude_q, "claude_spoiler": claude_spoiler, "claude_unsafe": claude_unsafe,
+                  "gemini": gem, "disagree": final["disagree"], "unsafe": final["unsafe"]})
+    notes.pop("gemini_error", None)
+    db.update("clips", clip_id, quality=final["quality"], spoiler_risk=final["spoiler"],
+              ai_notes=json.dumps(notes))
+    log.info("clip %s: Claude %s + Gemini %s -> %s (spoiler %s%s)", clip_id, claude_q, gem["quality"],
+             final["quality"], final["spoiler"], ", models disagree" if final["disagree"] else "")
+    return True
 
 
 class RenderWorker(threading.Thread):

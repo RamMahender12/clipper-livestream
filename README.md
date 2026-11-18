@@ -128,6 +128,18 @@ Set up each one by creating a bot with @BotFather, putting its token in `secrets
 
 Then redeploy. The review bot sends at most `[review_bot] max_per_hour` clips (default 12), 3 at a time, and nothing during quiet hours. `/next` sends more at once and `/status` shows the queue. It only accepts taps and commands from your own chat. Spoiler-flagged, unsafe, test and pre-release clips are never sent. Approving there is the same as approving in the dashboard: the clip posts to its streamer's accounts within a minute.
 
+## Two AI reviewers: Claude + Gemini
+
+Claude writes each clip's hook, title and caption and judges it from the **transcript and chat reaction**. Gemini then **watches the rendered clip** (a light 540p preview, picture and sound) and reports what happens on screen, a visual quality score, spoiler/cutscene and safety verdicts, whether the hook matches, and a better hook.
+
+The final verdict combines both: quality is 60% Gemini + 40% Claude (`[gemini] weight`), spoiler risk takes the stricter of the two, any **cutscene counts as a high spoiler** (Rockstar takes down isolated cinematics), and a clip is unsafe if either says so. Scores 3+ points apart (`disagree_points`), or a hook that doesn't match the video, are held for you. The dashboard and review bot show "quality 6/10 (Claude 4 · Gemini 8)" with Gemini's description. If Gemini fails, Claude's verdict stands.
+
+Backends (`[gemini] backend`):
+- **`vertex`** (default): Vertex AI on your Google Cloud project, billed to its billing account (Cloud credits apply). Create a service account with only the **Vertex AI User** role, save its JSON key as `secrets/vertex_sa.json`, and enable the Vertex AI API on the project.
+- **`ai_studio`**: a Gemini API key in `GEMINI_API_KEY`. Needs AI Studio prepay; Cloud free-trial credits don't apply there.
+
+`clipper gemini-review` runs Gemini over clips that are already waiting. New clips are reviewed automatically after rendering.
+
 ## Auto-approve
 
 With `[auto_approve] enabled = true` and `ANTHROPIC_API_KEY` set, the AI approves clips for you every few minutes. Each ready clip gets two opinions:

@@ -101,6 +101,12 @@ def auto_gate(cfg: dict, channel_cfg: dict | None, clip: dict, notes: dict) -> t
         return False, "no AI spoiler/safety check (template packaging; set ANTHROPIC_API_KEY)"
     if notes.get("unsafe"):
         return False, "flagged unsafe"
+    if notes.get("disagree"):
+        g = notes.get("gemini") or {}
+        return False, (f"Claude ({notes.get('claude_quality')}/10) and Gemini ({g.get('quality')}/10) "
+                       "disagree; your call")
+    if (notes.get("gemini") or {}).get("hook_matches") is False:
+        return False, "Gemini says the hook doesn't match the video"
     allowed = {"none"} | ({"low"} if cfg.get("auto_approve", {}).get("allow_spoiler_low") else set())
     risk = clip.get("spoiler_risk") or "unknown"
     if risk not in allowed:

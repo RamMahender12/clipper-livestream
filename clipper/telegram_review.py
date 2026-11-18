@@ -139,7 +139,11 @@ def caption_for(cfg: dict, clip: dict, kind: str) -> str:
     camp = guardrails.campaign_for(cfg, ch)
     name = ch.get("display_name") or clip["channel"]
     notes = _notes(clip)
-    lines = [f"#{clip['id']} {name} · quality {clip.get('quality') or 0}/10 · spoiler {clip.get('spoiler_risk')}"]
+    gem = notes.get("gemini") or {}
+    score = f"quality {clip.get('quality') or 0}/10"
+    if gem:
+        score += f" (Claude {notes.get('claude_quality')} · Gemini {gem.get('quality')})"
+    lines = [f"#{clip['id']} {name} · {score} · spoiler {clip.get('spoiler_risk')}"]
     if camp:
         lines.append(camp.get("name", camp.get("id", "")))
     if kind == "auto":
@@ -147,9 +151,13 @@ def caption_for(cfg: dict, clip: dict, kind: str) -> str:
         lines.append(f"Auto-approved: posts in about {veto} min unless you undo.")
     lines.append(f"Hook: {clip.get('hook', '').strip()}")
     lines.append(f"Caption: {(clip.get('caption') or '').strip()[:350]}")
+    if gem.get("what_happens"):
+        lines.append(f"Gemini saw: {gem['what_happens'][:220]}")
+    if gem.get("better_hook"):
+        lines.append(f"Gemini hook idea: {gem['better_hook']}")
     why = (clip.get("decision_note") or notes.get("why") or "").strip()
     if why:
-        lines.append(f"AI: {why[:300]}")
+        lines.append(f"AI: {why[:260]}")
     return "\n".join(lines)[:1024]
 
 

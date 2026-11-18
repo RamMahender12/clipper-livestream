@@ -223,6 +223,16 @@ def _posted_caption(clip: dict) -> str:
                                       hashtags=tags))
 
 
+def _gemini_line(notes: dict) -> str:
+    g = notes.get("gemini") or {}
+    if not g:
+        return ""
+    return (f"A second reviewer (Gemini) watched the video: {g.get('what_happens', '')} "
+            f"Visual quality {g.get('quality')}/10; cutscene: {g.get('cutscene')}; "
+            f"hook matches the video: {g.get('hook_matches')}. Combined quality {notes.get('claude_quality')} "
+            f"(transcript-based) + {g.get('quality')} (video) shown above.\n")
+
+
 def judge_clip(cfg: dict, clip: dict, notes: dict, ch: dict | None, camp: dict | None,
                history: list[PastClip], est: Estimate) -> tuple[dict | None, str]:
     acfg = cfg["auto_approve"]
@@ -242,6 +252,7 @@ def judge_clip(cfg: dict, clip: dict, notes: dict, ch: dict | None, camp: dict |
         f"What the packaging AI said the moment is: {notes.get('why', '')}\n"
         f"Packaging AI quality score: {clip.get('quality')}/10; spoiler risk: {clip.get('spoiler_risk')}\n"
         f"Chat reaction: {spike_terms or 'n/a'} (spike score {float(clip.get('score') or 0):.1f})\n"
+        f"{_gemini_line(notes)}"
         f"Campaign brief: {brief}\n"
         f"Transcript:\n<transcript>\n{(clip.get('transcript') or '').strip() or '(no speech)'}\n</transcript>\n\n"
         f"This page's history ({est.n} posts with mature view data):\n"

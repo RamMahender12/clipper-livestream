@@ -26,7 +26,7 @@ RUN mkdir -p /usr/share/fonts/truetype/anton \
     https://github.com/google/fonts/raw/main/ofl/anton/Anton-Regular.ttf \
  && fc-cache -f
 COPY --from=whisper /src/build/bin/whisper-cli /usr/local/bin/whisper-cli
-RUN pip install --no-cache-dir "anthropic>=2.0,<3" "streamlink==8.6.3"
+RUN pip install --no-cache-dir "anthropic>=2.0,<3" "streamlink==8.6.3" "google-auth>=2.30,<3"
 
 WORKDIR /app
 COPY --from=whisper /ggml-base.en.bin /app/models/ggml-base.en.bin

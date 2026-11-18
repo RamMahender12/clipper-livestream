@@ -78,6 +78,18 @@ DEFAULTS: dict = {
         "earliest_footage": "2026-11-18T11:00:00+00:00",
     },
     "stats": {"refresh_minutes": 120},
+    "gemini": {
+        "enabled": True,  # second reviewer that watches the rendered clip (needs GEMINI_API_KEY)
+        "model": "gemini-3.8-flash",
+        "backend": "vertex",  # vertex (Cloud project + service account) | ai_studio (API key, prepay)
+        "service_account_file": "secrets/vertex_sa.json",
+        "vertex_project": "",  # empty = the service account's own project
+        "vertex_location": "global",
+        "api_key_env": "GEMINI_API_KEY",
+        "thinking_level": "low",
+        "weight": 0.6,  # share of the final score from Gemini's visual score
+        "disagree_points": 3,  # scores this far apart are held for you
+    },
     "review_bot": {
         "enabled": True,  # approve/reject clips from Telegram (needs TELEGRAM_REVIEW_* secrets)
         "max_per_hour": 12,  # clips sent for review per hour (respects quiet hours)

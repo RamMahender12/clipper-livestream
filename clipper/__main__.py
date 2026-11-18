@@ -15,12 +15,14 @@
   clipper instagram-accounts   list Instagram Business account IDs for the token
   clipper telegram setup|test [--review]  connect the alerts bot (or the review bot)
   clipper campaigns            check for new GTA 6 campaigns now (Telegram alert)
+  clipper gemini-review        have Gemini watch clips already waiting
   clipper service install|status|restart|stop|start|uninstall
                                run unattended in the background (macOS launchd)
 """
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import shutil
@@ -112,6 +114,10 @@ def cmd_doctor(args, cfg) -> int:
     if sys.platform == "darwin":
         print(f"  [{'ok' if st['state'] in ('running', 'active') else '--'}] background service: "
               f"{'installed, ' + st['state'] if st['installed'] else 'not installed (clipper service install)'}")
+    from . import gemini as _gemini
+
+    print(f"  [{'ok' if _gemini.configured(cfg) else '--'}] Gemini video reviewer"
+          f"{' (' + cfg['gemini']['model'] + ' via ' + cfg['gemini'].get('backend', 'vertex') + ')' if _gemini.configured(cfg) else ' - not set up (secrets/vertex_sa.json)'}")
     acfg = cfg["auto_approve"]
     if acfg.get("enabled"):
         print(f"  [{'ok' if have_key else '!!'}] auto-approve ON"
@@ -352,6 +358,32 @@ def cmd_campaigns(args, cfg) -> int:
     return 0
 
 
+def cmd_gemini_review(args, cfg) -> int:
+    """Have Gemini watch clips that are already waiting (it runs automatically for new ones)."""
+    from . import gemini
+
+    if not gemini.configured(cfg):
+        print("Gemini isn't set up: add secrets/vertex_sa.json (Vertex backend) or GEMINI_API_KEY "
+              "with [gemini] backend = \"ai_studio\".")
+        return 1
+    db = open_db(cfg)
+    rows = db.query("SELECT id, ai_notes FROM clips WHERE status = 'ready' AND final_path != '' "
+                    "ORDER BY id DESC")
+    todo = [r["id"] for r in rows if '"gemini"' not in (r["ai_notes"] or "")][: args.limit]
+    print(f"reviewing {len(todo)} clip(s) with {cfg['gemini']['model']}...")
+    for cid in todo:
+        ok = pipeline.gemini_review(db, cfg, cid)
+        r = dict(db.one("SELECT quality, spoiler_risk, ai_notes FROM clips WHERE id = ?", (cid,)))
+        n = json.loads(r["ai_notes"] or "{}")
+        g = n.get("gemini") or {}
+        print(f"  #{cid}: " + (f"Claude {n.get('claude_quality')} + Gemini {g.get('quality')} -> {r['quality']}, "
+                              f"spoiler {r['spoiler_risk']}{', DISAGREE' if n.get('disagree') else ''}"
+                              if ok else f"failed ({n.get('gemini_error', '')})"))
+        if ok:  # let the auto-approver look again with the new verdict
+            db.execute("UPDATE clips SET auto_checked_at = NULL WHERE id = ?", (cid,))
+    return 0
+
+
 def cmd_post(args, cfg) -> int:
     from . import scheduler
 
@@ -534,6 +566,8 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--refresh", action="store_true")
     sub.add_parser("launch-times")
     sub.add_parser("campaigns", help="check for new Content Rewards campaigns now")
+    gr = sub.add_parser("gemini-review", help="have Gemini watch clips already waiting")
+    gr.add_argument("--limit", type=int, default=50)
     sv = sub.add_parser("service")
     sv.add_argument("action", choices=["install", "status", "start", "stop", "restart", "uninstall"])
     a = sub.add_parser("auth")
@@ -559,7 +593,7 @@ def main(argv: list[str] | None = None) -> int:
         "cut": cmd_cut, "post": cmd_post, "stats": cmd_stats, "launch-times": cmd_launch_times,
         "auth": cmd_auth, "autoreview": cmd_autoreview, "service": cmd_service,
         "instagram-accounts": cmd_instagram_accounts, "telegram": cmd_telegram,
-        "campaigns": cmd_campaigns,
+        "campaigns": cmd_campaigns, "gemini-review": cmd_gemini_review,
     }
     if args.cmd == "review":
         args.no_watch = args.no_post = True
