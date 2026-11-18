@@ -193,16 +193,34 @@ class RunOnceTests(unittest.TestCase):
         row = lambda i: self.db.one("SELECT * FROM clips WHERE id = ?", (i,))
         self.assertEqual(row(good)["status"], "approved")
         self.assertEqual(row(good)["decided_by"], "auto")
-        self.assertEqual(row(weak)["status"], "ready")  # cold start needs quality 8
-        self.assertIn("cold start", row(weak)["decision_note"])
+        self.assertEqual(row(weak)["status"], "rejected")  # cold start needs quality 8: no judge call
+        self.assertIn("Below the bar, not judged", row(weak)["decision_note"])
         self.assertEqual(row(test)["status"], "ready")
         self.assertIn("test footage", row(test)["decision_note"])
-        self.assertEqual(j.call_count, 2)  # gated clip never reaches Claude
+        self.assertEqual(j.call_count, 1)  # only the clip that could pass reaches the judge
         with self.judge() as j:
             autoapprove.run_once(self.db, self.cfg)
             self.assertEqual(j.call_count, 0)  # unchanged clips aren't re-reviewed
 
+    def test_below_bar_without_auto_reject_is_held_unjudged(self):
+        self.cfg["auto_approve"]["auto_reject"] = False
+        weak = add_clip(self.db, self.tmp, quality=5)
+        with self.judge() as j:
+            autoapprove.run_once(self.db, self.cfg)
+        row = self.db.one("SELECT status, decision_note FROM clips WHERE id = ?", (weak,))
+        self.assertEqual((row["status"], j.call_count), ("ready", 0))
+        self.assertIn("cold-start bar of 8", row["decision_note"])
+
+    def test_below_bar_reasons(self):
+        acfg = dict(AUTO)
+        self.assertIn("cold-start bar of 8", autoapprove.below_bar(acfg, Estimate(pct=0.5, n=0), 6))
+        self.assertEqual(autoapprove.below_bar(acfg, Estimate(pct=0.5, n=0), 6, cold_start_min_quality=6), "")
+        self.assertEqual(autoapprove.below_bar(acfg, Estimate(pct=0.5, n=0), 8), "")
+        self.assertIn("history predicts p20", autoapprove.below_bar(acfg, Estimate(pct=0.2, n=50), 9))
+        self.assertEqual(autoapprove.below_bar(acfg, Estimate(pct=0.7, n=50), 3), "")  # history decides once warm
+
     def test_held_clips_are_listed_as_waiting(self):
+        self.cfg["auto_approve"]["auto_reject"] = False
         good = add_clip(self.db, self.tmp, quality=9)
         weak = add_clip(self.db, self.tmp, quality=5)
         fresh = add_clip(self.db, self.tmp, quality=9)

@@ -92,6 +92,16 @@ def process_clip(db: DB, cfg: dict, clip: dict) -> None:
                                  "claude_unsafe": meta.unsafe}),
         )
         hook = meta.hook
+        # a weak chat-spike moment stops here: no render, video check or judge. Claude's transcript
+        # score of 4 or below never became a postable chat clip in launch-day data (0 of 38).
+        # Viewer clips always go on: Claude underrates visual moments it can only read about.
+        floor = int(cfg["ai"].get("min_quality_to_render", 0))
+        if clip.get("spike_id") and meta.source != "template" and meta.quality < floor:
+            db.update("clips", clip_id, status="rejected", decided_by="auto", decided_at=time.time(),
+                      decision_note=f"Weak moment: Claude rated it {meta.quality}/10 from the transcript "
+                                    f"(needs {floor} to be rendered and reviewed)")
+            log.info("clip %s: skipped, Claude rated it %s/10", clip_id, meta.quality)
+            return
     else:
         hook = clip["hook"].strip()  # " " means a human cleared it on purpose
 

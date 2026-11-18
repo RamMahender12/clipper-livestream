@@ -271,6 +271,18 @@ def judge_clip(cfg: dict, clip: dict, notes: dict, ch: dict | None, camp: dict |
 
 
 # ---------------------------------------------------------------- decision
+def below_bar(acfg: dict, est: Estimate, quality: int, cold_start_min_quality: int | None = None) -> str:
+    """Why this clip can't be auto-approved whatever the judge says, or "" if it can."""
+    if est.n < int(acfg["min_history"]):
+        bar = int(acfg["cold_start_min_quality"])
+        if cold_start_min_quality is not None:
+            bar = min(bar, int(cold_start_min_quality))
+        return f"quality {quality} is under the cold-start bar of {bar}" if quality < bar else ""
+    if est.pct < float(acfg["min_percentile"]):
+        return f"history predicts p{round(est.pct * 100)}, under p{round(float(acfg['min_percentile']) * 100)}"
+    return ""
+
+
 def decide(acfg: dict, gate_ok: bool, gate_reason: str, judge: dict | None, judge_err: str,
            est: Estimate, quality: int, approved_today: int,
            cold_start_min_quality: int | None = None) -> Decision:
@@ -354,13 +366,19 @@ def run_once(db: DB, cfg: dict, dry_run: bool = False) -> list[str]:
         camp = guardrails.campaign_for(cfg, ch)
         gate_ok, gate_reason = guardrails.auto_gate(cfg, ch, clip, notes)
         est = estimate(history, clip, platform_views, cfg["posting"]["platforms"])
-        judge, err = judge_clip(cfg, clip, notes, ch, camp, history, est) if gate_ok else (None, "")
         from . import twitch_clips
 
         viewer_bar = (cfg["twitch_clips"].get("cold_start_min_quality")
                       if twitch_clips.evidence(cfg, clip) == "strong" else None)
-        d = decide(acfg, gate_ok, gate_reason, judge, err, est, int(clip.get("quality") or 0), approved_today,
-                   cold_start_min_quality=viewer_bar)
+        quality = int(clip.get("quality") or 0)
+        why_not = below_bar(acfg, est, quality, viewer_bar)
+        if gate_ok and why_not:
+            # it can't be approved whatever the judge says: don't pay for a judge call
+            d = Decision("reject" if acfg.get("auto_reject", True) else "hold", f"Below the bar, not judged: {why_not}")
+        else:
+            judge, err = judge_clip(cfg, clip, notes, ch, camp, history, est) if gate_ok else (None, "")
+            d = decide(acfg, gate_ok, gate_reason, judge, err, est, quality, approved_today,
+                       cold_start_min_quality=viewer_bar)
         lines.append(f"clip {clip['id']}: {d.action.upper()} - {d.note}")
         if dry_run:
             continue

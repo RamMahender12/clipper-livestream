@@ -63,6 +63,7 @@ DEFAULTS: dict = {
     },
     "ai": {
         "enabled": True,
+        "min_quality_to_render": 5,  # chat-spike clips Claude scores below this aren't rendered or reviewed
         "model": "claude-opus-5-5",
         "effort": "medium",
         "page_handle": "@yourpage",

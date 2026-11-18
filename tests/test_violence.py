@@ -79,6 +79,34 @@ class CutTests(unittest.TestCase):
         self.assertNotIn("violence_cut", json.loads(row["ai_notes"]))
 
 
+class WeakMomentTests(unittest.TestCase):
+    def test_weak_chat_moments_are_not_rendered_but_viewer_clips_are(self):
+        from clipper import metadata
+        tmp = Path(tempfile.mkdtemp())
+        (tmp / "seg.ts").write_bytes(b"x")
+        cfg = config_mod._merge(config_mod.DEFAULTS, {"paths": {"data_dir": str(tmp)},
+                                                      "channels": [{"login": "lacy", "permission": "own"}]})
+        db = DB(tmp / "t.db")
+        now = time.time()
+        common = dict(channel="lacy", status="rendering", source=str(tmp / "seg.ts"), start_s=0, duration_s=20,
+                      words_json="[]", score=3.0, created_at=now, updated_at=now)
+        chat = db.insert("clips", spike_id=7, **common)
+        viewer = db.insert("clips", **common)
+        weak = metadata.ClipMeta(hook="h", title="t", caption="c", quality=4, source="claude-opus-5-5")
+        with mock.patch.object(metadata, "generate", return_value=weak), \
+                mock.patch.object(pipeline, "render_final") as render, \
+                mock.patch.object(pipeline, "gemini_review"), mock.patch.object(pipeline, "cut_violence", return_value=""), \
+                mock.patch.object(pipeline, "swap_hook"):
+            pipeline.process_clip(db, cfg, dict(db.one("SELECT * FROM clips WHERE id = ?", (chat,))))
+            render.assert_not_called()
+            pipeline.process_clip(db, cfg, dict(db.one("SELECT * FROM clips WHERE id = ?", (viewer,))))
+            self.assertEqual(render.call_count, 1)  # viewer clips always get the full check
+        row = dict(db.one("SELECT * FROM clips WHERE id = ?", (chat,)))
+        self.assertEqual((row["status"], row["decided_by"]), ("rejected", "auto"))
+        self.assertIn("rated it 4/10", row["decision_note"])
+        self.assertEqual(db.one("SELECT status FROM clips WHERE id = ?", (viewer,))["status"], "ready")
+
+
 class PhoneFilterTests(unittest.TestCase):
     def test_only_good_clips_reach_the_phone(self):
         tmp = Path(tempfile.mkdtemp())
