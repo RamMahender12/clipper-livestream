@@ -132,6 +132,13 @@ def _finish(db: DB, clip_id: int, **fields) -> bool:
 def check_and_finish(db: DB, cfg: dict, clip_id: int, own_hook: bool) -> None:
     """The steps after a render: video check, cut violence and music, sharper hook, then ready."""
     gemini_review(db, cfg, clip_id)  # second opinion on the finished video
+    row = dict(db.one("SELECT decided_by, ai_notes FROM clips WHERE id = ?", (clip_id,)))
+    if row.get("decided_by") != "human" and (why := guardrails.off_game(cfg, _notes(row))):
+        # before any trim or hook swap: those re-render, and could pay for another check
+        _finish(db, clip_id, status="rejected", decided_by="auto", decided_at=time.time(),
+                decision_note=f"Dropped: {why}"[:1500])
+        log.info("clip %s dropped: not GTA 6 gameplay", clip_id)
+        return
     if cut_violence(db, cfg, clip_id) == "mostly":
         _finish(db, clip_id, status="rejected", decided_by="auto", decided_at=time.time(),
                 decision_note="Dropped: mostly violence (YouTube age-restricts it), nothing clean enough to keep")
@@ -386,7 +393,14 @@ def swap_hook(db: DB, cfg: dict, clip_id: int) -> bool:
         return False
     if backup:
         backup.unlink(missing_ok=True)
-    gemini_review(db, cfg, clip_id)
+    if g.get("recheck_after_swap", False):
+        gemini_review(db, cfg, clip_id)
+    else:
+        # Same footage, and the new hook is the video check's own words: take it as matching rather
+        # than pay for a second check (19 Nov: ~$1.50 a day, and it rejected its own hook 48 times
+        # in ~120). Everything else it found (violence, age, music, game) is about the footage.
+        gem["hook_matches"] = True
+        db.update("clips", clip_id, ai_notes=json.dumps(notes))
     log.info("clip %s: hook swapped to Gemini's %r (was %r)", clip_id, new, old)
     return True
 

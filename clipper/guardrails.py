@@ -91,6 +91,17 @@ def gemini_label(gem: dict | None) -> str:
     return label(gem)
 
 
+def off_game(cfg: dict, notes: dict) -> str:
+    """Why the clip is dropped as not GTA 6 gameplay (giveaways, IRL, chatting, other games), or "".
+    Every campaign here pays for GTA 6 clips, so these can never post; holding them for you only
+    filled the queue (19 Nov: ~104 of 161 held clips). [gemini].reject_off_game = false holds them."""
+    gem = notes.get("gemini") or {}
+    if gem.get("is_gta6") is not False or not cfg.get("gemini", {}).get("reject_off_game", True):
+        return ""
+    seen = (gem.get("what_happens") or "").strip()
+    return f"not GTA 6 gameplay ({gemini_label(gem)}){': ' + seen[:200] if seen else ''}"
+
+
 def auto_gate(cfg: dict, channel_cfg: dict | None, clip: dict, notes: dict) -> tuple[bool, str]:
     """Checks a clip must pass before the AI may approve it on its own.
     These can't be switched off: anything failing them waits for a human."""

@@ -352,6 +352,20 @@ def run_once(db: DB, cfg: dict, dry_run: bool = False) -> list[str]:
                             decision_note=f"Expired: still unposted after {acfg['expire_hours']}h"):
                 lines.append(f"clip {r['id']}: expired")
 
+    # the video check says it isn't GTA 6 gameplay: it can never post, so it doesn't wait for you
+    # (new clips are dropped in the pipeline; this clears ones held before that, or after a redo)
+    if not dry_run:
+        for r in db.query("SELECT id, updated_at, ai_notes FROM clips WHERE status = 'ready' "
+                          "AND COALESCE(decided_by, '') != 'human' AND ai_notes LIKE '%is_gta6%'"):
+            try:
+                why = guardrails.off_game(cfg, json.loads(r["ai_notes"] or "{}"))
+            except json.JSONDecodeError:
+                continue
+            if why and db.update_if("clips", r["id"], {"status": "ready", "updated_at": r["updated_at"]},
+                                    status="rejected", decided_by="auto", decided_at=now,
+                                    decision_note=f"Dropped: {why}"[:1500]):
+                lines.append(f"clip {r['id']}: rejected, not GTA 6 gameplay")
+
     history, platform_views = load_history(db, cfg, now)
     approved_today = approved_in_last_day(db, now)
     rows = db.query(

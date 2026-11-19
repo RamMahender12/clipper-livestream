@@ -239,7 +239,7 @@ class HookSwapTests(unittest.TestCase):
         db.update("clips", clip_id, final_path=str(self.video))
         return self.video
 
-    def test_swaps_once_and_rechecks(self):
+    def test_swaps_once_without_paying_for_a_second_check(self):
         with mock.patch.object(gemini, "configured", return_value=True), \
                 mock.patch.object(gemini, "review", side_effect=self.review), \
                 mock.patch.object(pipeline, "render_final", side_effect=self.render):
@@ -250,12 +250,21 @@ class HookSwapTests(unittest.TestCase):
         self.assertEqual(row["hook"], "Tiger ambush at the gas station")
         self.assertEqual(notes["hook_swapped"], {"from": "LACY steals a jet", "to": "Tiger ambush at the gas station",
                                                  "why": "mismatch"})
-        self.assertEqual(self.hooks_seen, ["Tiger ambush at the gas station"])  # Gemini re-checked the new one
+        self.assertEqual(self.hooks_seen, [])  # same footage, its own hook: no second check
         self.assertTrue(notes["gemini"]["hook_matches"])
+        self.assertFalse(notes["gemini"]["violence"] or notes["gemini"]["is_gta6"] is False)  # the rest kept
         self.assertEqual(self.video.read_bytes(), b"render with Tiger ambush at the gas station")
         self.assertFalse((self.tmp / "final.first.mp4").exists())
         ok, why = guardrails.auto_gate(self.cfg, self.cfg["channels"][0], row, notes)
         self.assertTrue(ok, why)
+
+    def test_second_check_after_a_swap_can_be_turned_back_on(self):
+        self.cfg["gemini"]["recheck_after_swap"] = True
+        with mock.patch.object(gemini, "configured", return_value=True), \
+                mock.patch.object(gemini, "review", side_effect=self.review), \
+                mock.patch.object(pipeline, "render_final", side_effect=self.render):
+            self.assertTrue(pipeline.swap_hook(self.db, self.cfg, self.cid))
+        self.assertEqual(self.hooks_seen, ["Tiger ambush at the gas station"])
 
     def test_sharpens_good_clips_and_updates_the_title(self):
         good = {**GEM, "quality": 7, "hook_matches": True, "better_hook": "The tiger had other plans",

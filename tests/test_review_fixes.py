@@ -142,6 +142,58 @@ class RedoAfterOutageTests(unittest.TestCase):
         self.assertEqual(row(self.db, cid)["status"], "rejected")
 
 
+class OffGameTests(unittest.TestCase):
+    IRL = {"source": "claude-haiku-5-5", "gemini": {"is_gta6": False, "quality": 3, "model": "claude-sonnet-5-5",
+                                                    "what_happens": "Real-life IRL footage of Clix in an SUV"}}
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.cfg = make_cfg(self.tmp)
+        self.db = DB(Path(self.tmp) / "t.db")
+
+    def finish(self, cid):
+        with mock.patch.object(pipeline, "gemini_review"), \
+                mock.patch.object(pipeline, "cut_violence", return_value="") as cut, \
+                mock.patch.object(pipeline, "swap_hook") as swap:
+            pipeline.check_and_finish(self.db, self.cfg, cid, own_hook=True)
+        return cut, swap
+
+    def test_dropped_after_the_first_check_before_any_rerender(self):
+        cid = add_clip(self.db, self.tmp, status="rendering", ai_notes=json.dumps(self.IRL))
+        cut, swap = self.finish(cid)
+        r = row(self.db, cid)
+        self.assertEqual((r["status"], r["decided_by"]), ("rejected", "auto"))
+        self.assertIn("not GTA 6 gameplay", r["decision_note"])
+        self.assertIn("IRL footage of Clix", r["decision_note"])
+        cut.assert_not_called()
+        swap.assert_not_called()  # no re-render, no second check
+
+    def test_gameplay_and_your_clips_go_on(self):
+        gta = add_clip(self.db, self.tmp, status="rendering",
+                       ai_notes=json.dumps({"source": "x", "gemini": {"is_gta6": True}}))
+        yours = add_clip(self.db, self.tmp, status="rendering", decided_by="human", ai_notes=json.dumps(self.IRL))
+        self.finish(gta)
+        self.finish(yours)
+        self.assertEqual(row(self.db, gta)["status"], "ready")
+        self.assertEqual(row(self.db, yours)["status"], "ready")
+
+    def test_held_ones_are_cleared_by_the_auto_approver(self):
+        held = add_clip(self.db, self.tmp, ai_notes=json.dumps(self.IRL), auto_checked_at=time.time() + 5,
+                        decision_note="Needs a human: Video check doesn't think this is GTA 6 gameplay")
+        yours = add_clip(self.db, self.tmp, decided_by="human", ai_notes=json.dumps(self.IRL))
+        with mock.patch.object(autoapprove, "judge_clip", return_value=JUDGE_OK):
+            lines = autoapprove.run_once(self.db, self.cfg)
+        self.assertEqual(row(self.db, held)["status"], "rejected")
+        self.assertEqual(row(self.db, yours)["status"], "ready")
+        self.assertIn(f"clip {held}: rejected, not GTA 6 gameplay", lines)
+
+    def test_can_be_switched_back_to_holding(self):
+        self.cfg["gemini"]["reject_off_game"] = False
+        cid = add_clip(self.db, self.tmp, status="rendering", ai_notes=json.dumps(self.IRL))
+        self.finish(cid)
+        self.assertEqual(row(self.db, cid)["status"], "ready")
+
+
 class ClaimTests(unittest.TestCase):
     def test_two_connections_never_get_the_same_clip(self):
         tmp = tempfile.mkdtemp()
