@@ -64,7 +64,9 @@ DEFAULTS: dict = {
     },
     "ai": {
         "enabled": True,
-        "min_quality_to_render": 4,  # chat-spike clips scored below this aren't rendered (Haiku: 4 kept all good)
+        # clips scored below this aren't rendered or video-checked (viewer clips with strong Twitch views
+        # always are). 19 Nov: of 68 clips Haiku scored 4, none reached 6 after the video check.
+        "min_quality_to_render": 5,
         # packaging (hook/title/caption/score) runs on every clip: the cheapest model, thinking off.
         # Launch day on Opus: ~$0.03 a clip, ~80% of a $10 day. Haiku: well under a tenth of a cent.
         "model": "claude-haiku-5-5",
@@ -102,12 +104,12 @@ DEFAULTS: dict = {
         "disagree_points": 3,  # scores this far apart are held for you
         "swap_hook": True,  # hook doesn't match the video: burn in Gemini's, re-render, re-check (once)
         "sharpen_hooks": True,  # also use the video check's hook/title on clips worth it (from what it saw)
-        "sharpen_min_quality": 5,  # ...when the clip's combined quality is at least this
+        "sharpen_min_quality": 6,  # ...when the clip's combined quality is at least this (costs a 2nd check)
         # backend "claude": Claude looks at frames sampled from the clip (no Google account needed)
         "claude_model": "claude-sonnet-5-5",
         "claude_effort": "low",
         "claude_thinking": "off",
-        "frames": 8,
+        "frames": 6,
         "frame_width": 360,
         # breaker: stop calling a failing reviewer instead of hammering it (alerts once on Telegram)
         "max_per_hour": 60,
@@ -175,6 +177,12 @@ DEFAULTS: dict = {
         "min_confidence": 7,  # Claude's confidence, 1-10
         "cold_start_min_quality": 8,  # stricter bar until there's history
         "cold_start_min_confidence": 7,  # Claude's confidence needed until there's history
+        # daily picks: each streamer's best safe clips still post when the judge is only unsure ("hold"):
+        # up to this many a day per streamer, counting anything you or the AI approved that day
+        "daily_picks": 3,
+        "pick_min_quality": 6,  # only clips at least this good (combined score)
+        "pick_gap_minutes": 90,  # spread picks over the day
+        "pick_max_age_hours": 3,  # launch moments go stale: only fresh clips
         "min_gemini_quality": 6,  # the video reviewer's own score must reach this
         "max_per_day": 20,
         "cold_start_max_per_day": 6,

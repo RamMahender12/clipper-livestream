@@ -150,7 +150,8 @@ class WeakMomentTests(unittest.TestCase):
         common = dict(channel="lacy", status="rendering", source=str(tmp / "seg.ts"), start_s=0, duration_s=20,
                       words_json="[]", score=3.0, created_at=now, updated_at=now)
         chat = db.insert("clips", spike_id=7, **common)
-        viewer = db.insert("clips", **common)
+        viewer = db.insert("clips", source_views=1600, source_pct=0.97, **common)  # strong Twitch evidence
+        weak_viewer = db.insert("clips", source_views=12, source_pct=0.3, **common)
         weak = metadata.ClipMeta(hook="h", title="t", caption="c", quality=3, source="claude-haiku-5-5")
         with mock.patch.object(metadata, "generate", return_value=weak), \
                 mock.patch.object(pipeline, "render_final") as render, \
@@ -159,7 +160,9 @@ class WeakMomentTests(unittest.TestCase):
             pipeline.process_clip(db, cfg, dict(db.one("SELECT * FROM clips WHERE id = ?", (chat,))))
             render.assert_not_called()
             pipeline.process_clip(db, cfg, dict(db.one("SELECT * FROM clips WHERE id = ?", (viewer,))))
-            self.assertEqual(render.call_count, 1)  # viewer clips always get the full check
+            self.assertEqual(render.call_count, 1)  # strong viewer clips always get the full check
+            pipeline.process_clip(db, cfg, dict(db.one("SELECT * FROM clips WHERE id = ?", (weak_viewer,))))
+            self.assertEqual(render.call_count, 1)  # a weak viewer clip doesn't
         row = dict(db.one("SELECT * FROM clips WHERE id = ?", (chat,)))
         self.assertEqual((row["status"], row["decided_by"]), ("rejected", "auto"))
         self.assertIn("rated it 3/10", row["decision_note"])

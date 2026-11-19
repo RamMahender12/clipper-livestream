@@ -102,7 +102,10 @@ def process_clip(db: DB, cfg: dict, clip: dict) -> None:
         # score of 4 or below never became a postable chat clip in launch-day data (0 of 38).
         # Viewer clips always go on: Claude underrates visual moments it can only read about.
         floor = int(cfg["ai"].get("min_quality_to_render", 0))
-        if clip.get("spike_id") and meta.source != "template" and meta.quality < floor:
+        from . import twitch_clips
+
+        strong_viewer = not clip.get("spike_id") and twitch_clips.evidence(cfg, clip) == "strong"
+        if meta.source != "template" and meta.quality < floor and not strong_viewer:
             _finish(db, clip_id, status="rejected", decided_by="auto", decided_at=time.time(),
                     decision_note=f"Weak moment: Claude rated it {meta.quality}/10 from the transcript "
                                   f"(needs {floor} to be rendered and reviewed)")

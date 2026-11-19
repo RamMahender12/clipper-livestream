@@ -421,6 +421,82 @@ def run_once(db: DB, cfg: dict, dry_run: bool = False) -> list[str]:
         if d.action == "approve":
             approved_today += 1
         log.info("auto-review clip %s: %s", clip["id"], d.action)
+    if not dry_run:
+        lines += daily_picks(db, cfg, now)
+    return lines
+
+
+def _local_midnight(cfg: dict, now: float) -> float:
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    local = datetime.fromtimestamp(now, ZoneInfo(cfg["posting"].get("timezone", "UTC")))
+    return local.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+
+
+def daily_picks(db: DB, cfg: dict, now: float | None = None) -> list[str]:
+    """Each streamer still posts its best safe clips when the judge is only unsure.
+
+    A strict judge alone approved ~nothing for a day. So, up to [auto_approve].daily_picks a day per
+    streamer (counting everything approved that day), the best fresh clip that passes every safety
+    gate (age, violence, spoilers, nudity, music, off-game...) at pick_min_quality+ is approved even
+    if the judge said "hold". A judge "reject" is final; picks are spaced out and skip quiet hours;
+    the usual undo window applies.
+    """
+    acfg = cfg["auto_approve"]
+    quota = int(acfg.get("daily_picks", 0) or 0)
+    if not quota:
+        return []
+    now = now or time.time()
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    tz = ZoneInfo(cfg["posting"].get("timezone", "UTC"))
+    if datetime.fromtimestamp(now, tz).hour in set(cfg["posting"].get("quiet_hours", [])):
+        return []
+    midnight = _local_midnight(cfg, now)
+    gap = float(acfg.get("pick_gap_minutes", 90)) * 60
+    fresh = now - float(acfg.get("pick_max_age_hours", 3)) * 3600
+    min_q = int(acfg.get("pick_min_quality", 6))
+    lines: list[str] = []
+    for ch in cfg.get("channels", []):
+        kind, _ = guardrails.permission(ch)
+        if kind not in ("campaign", "written", "own"):
+            continue
+        login = ch["login"]
+        done = db.one("SELECT COUNT(*) n FROM clips WHERE channel = ? AND status IN ('approved', 'posted') "
+                      "AND decided_at >= ?", (login, midnight))["n"]
+        if done >= quota:
+            continue
+        last = db.one("SELECT MAX(decided_at) t FROM clips WHERE channel = ? AND status IN ('approved', 'posted')",
+                      (login,))["t"] or 0
+        if now - last < gap:
+            continue
+        cands = []
+        for row in db.query("SELECT * FROM clips WHERE channel = ? AND status = 'ready' AND quality >= ? "
+                            "AND created_at > ? AND COALESCE(decided_by, '') != 'human' "
+                            "AND auto_checked_at IS NOT NULL AND decision_note LIKE 'AI hold%'",
+                            (login, min_q, fresh)):
+            clip = dict(row)
+            try:
+                notes = json.loads(clip.get("ai_notes") or "{}")
+            except json.JSONDecodeError:
+                continue
+            ok, _ = guardrails.auto_gate(cfg, ch, clip, notes)
+            if ok:
+                vq = int((notes.get("gemini") or {}).get("quality") or 0)
+                cands.append((clip["quality"], vq, clip["score"] or 0, clip, notes))
+        if not cands:
+            continue
+        cands.sort(key=lambda c: c[:3], reverse=True)
+        clip = cands[0][3]
+        note = (f"Daily pick {done + 1}/{quota} for {ch.get('display_name') or login}: the best safe clip "
+                f"available (quality {clip['quality']}); the judge was unsure: {(clip['decision_note'] or '')[:300]}")
+        if db.update_if("clips", clip["id"], {"status": "ready", "updated_at": clip["updated_at"]},
+                        status="approved", decided_by="auto", decided_at=now, updated_at=now,
+                        decision_note=note[:1500]):
+            lines.append(f"clip {clip['id']}: DAILY PICK {done + 1}/{quota} for {login}")
+            log.info("auto-review clip %s: daily pick %s/%s for %s", clip["id"], done + 1, quota, login)
     return lines
 
 
