@@ -61,6 +61,10 @@ DEFAULTS: dict = {
         "hook_seconds": 3.0,
         "censor_profanity": True,  # swear words shown as f*****g in the burned-in captions
         "mute_profanity": True,  # ...and silenced in the audio (age-restriction / demonetisation risk)
+        # after the hook, the page's own one-line take stays on screen: commentary, not a bare repost
+        # (YouTube holds back reposted clips; Rockstar's policy is about fan use)
+        "take_overlay": True,
+        "take_max_chars": 90,
     },
     "ai": {
         "enabled": True,

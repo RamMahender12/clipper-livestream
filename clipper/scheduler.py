@@ -119,6 +119,7 @@ def _post_once(db: DB, cfg: dict) -> list[str]:
                 hashtags=[t for t in (clip["hashtags"] or "").split(",") if t],
                 is_paid_promotion=bool(camp and camp.get("paid_promotion", True)),
                 clip_id=clip["id"],
+                take=_take(clip),
             )
             # uploads earlier in this pass take minutes: you may have undone or rejected it meanwhile
             now_row = db.one("SELECT status, decided_by, decided_at FROM clips WHERE id = ?", (clip["id"],))
@@ -176,6 +177,13 @@ def _mark_fully_posted(db: DB, cfg: dict) -> None:
             "SELECT platform FROM posts WHERE clip_id = ? AND status != 'error'", (clip["id"],))}
         if targets and set(targets) <= done:
             db.update("clips", clip["id"], status="posted")
+
+
+def _take(clip: dict) -> str:
+    try:
+        return str((json.loads(clip.get("ai_notes") or "{}") or {}).get("take") or "")[:200]
+    except (json.JSONDecodeError, TypeError):
+        return ""
 
 
 def refresh_stats(db: DB, cfg: dict) -> int:

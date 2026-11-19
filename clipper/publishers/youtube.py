@@ -175,7 +175,12 @@ def _no_angle(text: str) -> str:
 
 def youtube_video_body(meta: PostMeta, ycfg: dict) -> dict:
     title = " ".join(_no_angle(meta.title or "").split())[:100].strip() or "GTA 6 clip"
-    description = trim_utf8(_no_angle(caption_with_tags(meta, 5000)), 5000)  # limit is 5000 bytes
+    body = caption_with_tags(meta, 4800)
+    if meta.take and meta.take.strip() not in body:  # our commentary first: this is a commentary page
+        body = f"{meta.take.strip()}\n\n{body}"
+    if "#shorts" not in body.lower():
+        body = f"{body} #Shorts"
+    description = trim_utf8(_no_angle(body), 5000)  # limit is 5000 bytes
     tags, used = [], 0
     for t in meta.hashtags:
         t = _no_angle(t.lstrip("#").strip())

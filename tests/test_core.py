@@ -219,5 +219,24 @@ class CleanCaptionTests(unittest.TestCase):
         self.assertTrue(af.startswith("volume=enable='between(t,0.460,0.840)+between(t,1.960,2.340)':volume=0,"))
         self.assertEqual(render.audio_filter([]), "loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000")
 
+
+class TakeOverlayTests(unittest.TestCase):
+    def test_take_follows_the_hook_masked_and_youtube_leads_with_it(self):
+        from clipper import captions
+        from clipper.publishers.base import PostMeta
+        from clipper.publishers.youtube import youtube_video_body
+        W = captions.Word
+        ass = captions.build_ass([W(4, 4.3, "go")], hook="He did not expect that",
+                                 take="This shit is why GTA 6 chaos never gets old", duration=12)
+        take = [l for l in ass.splitlines() if l.startswith("Dialogue") and ",Take," in l]
+        self.assertEqual(len(take), 1)
+        self.assertTrue(take[0].startswith("Dialogue: 3,0:00:03.00,0:00:12.00,Take"))
+        self.assertIn("This s**t is why", take[0])  # masked, normal casing
+        self.assertNotIn("Take,", captions.build_ass([], take="short", duration=3).split("[Events]")[1])  # too short a clip
+        body = youtube_video_body(PostMeta(title="t", caption="LACY moment #LACY", take="Best launch week ever"), {})
+        self.assertTrue(body["snippet"]["description"].startswith("Best launch week ever\n\nLACY moment"))
+        self.assertIn("#Shorts", body["snippet"]["description"])
+
+
 if __name__ == "__main__":
     unittest.main()

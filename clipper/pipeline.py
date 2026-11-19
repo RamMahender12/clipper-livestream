@@ -357,6 +357,16 @@ def render_final(db: DB, cfg: dict, clip_id: int, ch: dict, src: Path, start: fl
     ass_path = None
     if capcfg.get("enabled", True):
         credit = ch.get("credit") or f"twitch.tv/{ch.get('login', '')}"
+        take = ""
+        if capcfg.get("take_overlay", True):  # our own commentary on screen: not a bare repost
+            row = db.one("SELECT ai_notes FROM clips WHERE id = ?", (clip_id,))
+            try:
+                take = str((json.loads(row["ai_notes"] or "{}") if row else {}).get("take") or "")
+            except (json.JSONDecodeError, TypeError):
+                take = ""
+            limit = int(capcfg.get("take_max_chars", 90))
+            if len(take) > limit:  # older takes ran long: end on a whole word
+                take = take[: limit - 1].rsplit(" ", 1)[0].rstrip(",;:-") + "…"
         ass = captions.build_ass(
             words,
             width=ccfg["width"], height=ccfg["height"],
@@ -364,7 +374,7 @@ def render_final(db: DB, cfg: dict, clip_id: int, ch: dict, src: Path, start: fl
             highlight=capcfg["highlight_color"], per_chunk=capcfg["words_per_chunk"],
             hook=hook, hook_seconds=capcfg["hook_seconds"],
             credit=credit if ch.get("credit_overlay", True) else "", duration=dur,
-            censor=capcfg.get("censor_profanity", True),
+            censor=capcfg.get("censor_profanity", True), take=take,
         )
         ass_path = out_dir / "captions.ass"
         ass_path.write_text(ass, encoding="utf-8")

@@ -19,6 +19,7 @@ class PostMeta:
     hashtags: list[str] = field(default_factory=list)
     is_paid_promotion: bool = False  # True when a campaign pays per view -> platform disclosure toggles
     clip_id: int | None = None
+    take: str = ""  # the page's own one-line commentary (YouTube puts it first in the description)
 
 
 @dataclass

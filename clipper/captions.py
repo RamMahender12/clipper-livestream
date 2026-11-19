@@ -200,6 +200,7 @@ def build_ass(
     duration: float = 60.0,
     shift: float = 0.0,
     censor: bool = True,
+    take: str = "",
 ) -> str:
     """`shift` moves every word time (use when the video was trimmed after transcription)."""
     words, _ = split_markers(words)  # [MUSIC PLAYING] and friends never go on screen
@@ -222,6 +223,9 @@ def build_ass(
         f"-1,0,0,0,100,100,0,0,3,18,0,8,70,70,{int(height * 0.12)},1",
         f"Style: Credit,Arial,{int(font_size * 0.45)},&H40FFFFFF,&H40FFFFFF,&H80000000,&H00000000,"
         f"-1,0,0,0,100,100,0,0,1,3,0,8,40,40,{int(height * 0.05)},1",
+        # the page's own commentary, after the hook: white on a dark see-through box, top of frame
+        f"Style: Take,{font},{int(font_size * 0.58)},&H00FFFFFF,&H00FFFFFF,&H70000000,&H70000000,"
+        f"-1,0,0,0,100,100,0,0,3,14,0,8,90,90,{int(height * 0.12)},1",
         "",
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
@@ -232,6 +236,11 @@ def build_ass(
         lines.append(
             f"Dialogue: 3,{_ts(0)},{_ts(hook_seconds)},Hook,,0,0,0,,{{\\fad(0,250)}}{_clean((mask(hook) if censor else hook).upper())}"
         )
+    take = " ".join((take or "").split())
+    if take and duration > hook_seconds + 1:
+        text = _clean(mask(take) if censor else take)
+        start = hook_seconds if hook else 0
+        lines.append(f"Dialogue: 3,{_ts(start)},{_ts(duration)},Take,,0,0,0,,{{\\fad(250,0)}}{text}")
     chunks = chunk_words(words, per_chunk)
     for ci, chunk in enumerate(chunks):
         chunk_end = chunk[-1].end
