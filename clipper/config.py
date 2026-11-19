@@ -179,9 +179,11 @@ DEFAULTS: dict = {
         "cold_start_min_confidence": 7,  # Claude's confidence needed until there's history
         # daily picks: each streamer's best safe clips still post when the judge is only unsure ("hold"):
         # up to this many a day per streamer, counting anything you or the AI approved that day
-        "daily_picks": 3,
+        "daily_picks": 6,
         "pick_min_quality": 6,  # only clips at least this good (combined score)
-        "pick_gap_minutes": 90,  # spread picks over the day
+        "pick_fallback_quality": 5,  # ...or, after pick_fallback_after_minutes without a post, this good
+        "pick_fallback_after_minutes": 120,
+        "pick_gap_minutes": 60,  # at most one pick an hour per streamer (matches the posting gap)
         "pick_max_age_hours": 3,  # launch moments go stale: only fresh clips
         "min_gemini_quality": 6,  # the video reviewer's own score must reach this
         "max_per_day": 20,

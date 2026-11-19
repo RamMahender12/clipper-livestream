@@ -458,6 +458,10 @@ def daily_picks(db: DB, cfg: dict, now: float | None = None) -> list[str]:
     gap = float(acfg.get("pick_gap_minutes", 90)) * 60
     fresh = now - float(acfg.get("pick_max_age_hours", 3)) * 3600
     min_q = int(acfg.get("pick_min_quality", 6))
+    fallback_q = int(acfg.get("pick_fallback_quality", min_q))
+    fallback_after = float(acfg.get("pick_fallback_after_minutes", 120)) * 60
+    from . import twitch_clips
+
     lines: list[str] = []
     for ch in cfg.get("channels", []):
         kind, _ = guardrails.permission(ch)
@@ -472,27 +476,43 @@ def daily_picks(db: DB, cfg: dict, now: float | None = None) -> list[str]:
                       (login,))["t"] or 0
         if now - last < gap:
             continue
-        cands = []
-        for row in db.query("SELECT * FROM clips WHERE channel = ? AND status = 'ready' AND quality >= ? "
-                            "AND created_at > ? AND COALESCE(decided_by, '') != 'human' "
-                            "AND auto_checked_at IS NOT NULL AND decision_note LIKE 'AI hold%'",
-                            (login, min_q, fresh)):
-            clip = dict(row)
-            try:
-                notes = json.loads(clip.get("ai_notes") or "{}")
-            except json.JSONDecodeError:
-                continue
-            ok, _ = guardrails.auto_gate(cfg, ch, clip, notes)
-            if ok:
+        def candidates(rows, need_video: int = 0):
+            out = []
+            for row in rows:
+                clip = dict(row)
+                try:
+                    notes = json.loads(clip.get("ai_notes") or "{}")
+                except json.JSONDecodeError:
+                    continue
+                ok, _ = guardrails.auto_gate(cfg, ch, clip, notes)
                 vq = int((notes.get("gemini") or {}).get("quality") or 0)
-                cands.append((clip["quality"], vq, clip["score"] or 0, clip, notes))
+                if ok and vq >= need_video:
+                    strong = twitch_clips.evidence(cfg, clip) == "strong"
+                    # quality first, then what the video check saw, then real audience signal
+                    out.append((clip["quality"], vq, strong, clip["score"] or 0, clip))
+            return sorted(out, key=lambda c: c[:4], reverse=True)
+
+        cands = candidates(db.query(
+            "SELECT * FROM clips WHERE channel = ? AND status = 'ready' AND quality >= ? "
+            "AND created_at > ? AND COALESCE(decided_by, '') != 'human' "
+            "AND auto_checked_at IS NOT NULL AND decision_note LIKE 'AI hold%'", (login, min_q, fresh)))
+        fallback = False
+        if not cands and fallback_q < min_q and now - last >= fallback_after:
+            # nothing at 6+ for a while: a safe 5 the video check itself rated well keeps the page alive
+            cands = candidates(db.query(
+                "SELECT * FROM clips WHERE channel = ? AND status IN ('ready', 'rejected') AND quality >= ? "
+                "AND created_at > ? AND COALESCE(decided_by, '') != 'human' AND auto_checked_at IS NOT NULL "
+                "AND (decision_note LIKE 'AI hold%' OR decision_note LIKE 'Below the bar, not judged%')",
+                (login, fallback_q, fresh)), need_video=max(6, int(acfg.get("min_gemini_quality", 6))))
+            fallback = bool(cands)
         if not cands:
             continue
-        cands.sort(key=lambda c: c[:3], reverse=True)
-        clip = cands[0][3]
-        note = (f"Daily pick {done + 1}/{quota} for {ch.get('display_name') or login}: the best safe clip "
-                f"available (quality {clip['quality']}); the judge was unsure: {(clip['decision_note'] or '')[:300]}")
-        if db.update_if("clips", clip["id"], {"status": "ready", "updated_at": clip["updated_at"]},
+        clip = cands[0][4]
+        why = (f"nothing at {min_q}+ for {round((now - last) / 3600, 1) if last else 'a long'} h, so the best safe "
+               f"{clip['quality']}" if fallback else f"the best safe clip available (quality {clip['quality']})")
+        note = (f"Daily pick {done + 1}/{quota} for {ch.get('display_name') or login}: {why}; "
+                f"before: {(clip['decision_note'] or '')[:300]}")
+        if db.update_if("clips", clip["id"], {"status": clip["status"], "updated_at": clip["updated_at"]},
                         status="approved", decided_by="auto", decided_at=now, updated_at=now,
                         decision_note=note[:1500]):
             lines.append(f"clip {clip['id']}: DAILY PICK {done + 1}/{quota} for {login}")

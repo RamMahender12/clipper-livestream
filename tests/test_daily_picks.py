@@ -46,13 +46,14 @@ class DailyPickTests(unittest.TestCase):
         lines = autoapprove.daily_picks(self.db, self.cfg, at(12))
         self.assertEqual(len(lines), 1)
         self.assertEqual(self.status(good)["status"], "approved")
-        self.assertIn("Daily pick 1/3", self.status(good)["decision_note"])
+        self.assertIn("Daily pick 1/6", self.status(good)["decision_note"])
         self.assertEqual(self.status(ok)["status"], "ready")
         self.assertEqual(autoapprove.daily_picks(self.db, self.cfg, at(12, 30)), [])  # 90 min gap
         self.assertEqual(len(autoapprove.daily_picks(self.db, self.cfg, at(13, 31))), 1)
         self.assertEqual(self.status(ok)["status"], "approved")
 
     def test_never_unsafe_rejected_stale_weak_or_test(self):
+        self.cfg["auto_approve"]["pick_fallback_quality"] = 6  # fallback off: covered below
         violent = self.clip(notes={**SAFE, "gemini": {**SAFE["gemini"], "violence": [[1, 3, "beating"]]}})
         rejected = self.clip(note="AI reject 7/10: boring")
         stale = self.clip(age_min=240)
@@ -63,6 +64,7 @@ class DailyPickTests(unittest.TestCase):
             self.assertEqual(self.status(cid)["status"], "ready")
 
     def test_quota_counts_your_approvals_and_quiet_hours(self):
+        self.cfg["auto_approve"]["daily_picks"] = 3
         for i in range(3):
             self.db.insert("clips", channel="lacy", status="posted", decided_by="human", decided_at=at(9 + i),
                            quality=7, score=1, created_at=at(9), updated_at=at(9))
@@ -72,6 +74,20 @@ class DailyPickTests(unittest.TestCase):
         self.assertEqual(autoapprove.daily_picks(self.db, self.cfg, at(3)), [])  # quiet hours
         self.assertEqual(len(autoapprove.daily_picks(self.db, self.cfg, at(15))), 1)
         self.assertEqual(self.status(cid)["status"], "approved")
+
+    def test_fallback_to_a_safe_5_after_two_quiet_hours(self):
+        self.db.insert("clips", channel="lacy", status="posted", decided_by="auto", decided_at=at(11), quality=7,
+                       score=1, created_at=at(11), updated_at=at(11))
+        five = self.clip(quality=5, note="Below the bar, not judged: quality 5 is under the cold-start bar of 6",
+                         now=at(12, 30))
+        self.db.execute("UPDATE clips SET status = 'rejected', decided_by = 'auto' WHERE id = ?", (five,))
+        no_video = self.clip(quality=5, note="AI hold 5/10: ok", notes={"source": "claude-haiku-5-5"}, now=at(12, 30))
+        self.assertEqual(autoapprove.daily_picks(self.db, self.cfg, at(12, 30)), [])  # posted 1.5 h ago: wait
+        lines = autoapprove.daily_picks(self.db, self.cfg, at(13, 5))  # 2 h without a post, no 6+ waiting
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(self.status(five)["status"], "approved")
+        self.assertIn("nothing at 6+", self.status(five)["decision_note"])
+        self.assertEqual(self.status(no_video)["status"], "ready")  # never without a 6+ video check
 
 
 if __name__ == "__main__":
