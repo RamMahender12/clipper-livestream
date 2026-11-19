@@ -90,19 +90,31 @@ def run_once(db: DB, cfg: dict, send=None, send_pause=None) -> list[str]:
     from . import notify
     from .publishers import get_publisher
 
+    from .publishers.base import status_many
+
     send = send or notify.send
     send_pause = send_pause or _send_with_resume
     _schema(db)
     lines: list[str] = []
-    for post in db.query("SELECT p.*, c.channel FROM posts p JOIN clips c ON c.id = p.clip_id "
-                         "WHERE p.status = 'published' AND p.remote_id != '' AND p.platform IN ('youtube', 'instagram') "
-                         "AND p.id NOT IN (SELECT post_id FROM takedowns)"):
-        ch = config_mod.channel(cfg, post["channel"]) or {"login": post["channel"]}
+    posts = db.query("SELECT p.*, c.channel FROM posts p JOIN clips c ON c.id = p.clip_id "
+                     "WHERE p.status = 'published' AND p.remote_id != '' AND p.platform IN ('youtube', 'instagram') "
+                     "AND p.id NOT IN (SELECT post_id FROM takedowns)")
+    # one batch per account: YouTube checks 50 videos per quota unit instead of one
+    groups: dict[tuple[str, str], list] = {}
+    for post in posts:
+        groups.setdefault((post["platform"], post["channel"]), []).append(post)
+    states: dict[int, tuple[str, str]] = {}
+    for (platform, channel), group in groups.items():
+        ch = config_mod.channel(cfg, channel) or {"login": channel}
         try:
-            state, detail = get_publisher(post["platform"], cfg, ch).check_status(post["remote_id"])
+            found = status_many(get_publisher(platform, cfg, ch), [p["remote_id"] for p in group])
         except Exception as exc:
-            log.warning("takedown check %s/%s failed: %s", post["platform"], post["remote_id"], exc)
+            log.warning("takedown check %s/%s failed: %s", platform, channel, exc)
             continue
+        states.update({p["id"]: found.get(p["remote_id"], ("unknown", "")) for p in group})
+    for post in posts:
+        ch = config_mod.channel(cfg, post["channel"]) or {"login": post["channel"]}
+        state, detail = states.get(post["id"], ("unknown", ""))
         if state in ("ok", "unknown"):
             continue
         db.execute("INSERT OR IGNORE INTO takedowns (post_id, platform, account, channel, url, kind, detail, detected_at) "

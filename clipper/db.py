@@ -91,6 +91,8 @@ MIGRATIONS: dict[str, list[tuple[str, str]]] = {
     ],
     "posts": [
         ("account", "TEXT DEFAULT ''"),  # which page posted it (per-streamer accounts)
+        ("attempts", "INTEGER DEFAULT 1"),  # upload tries so far
+        ("retry_at", "REAL"),  # a failed upload that's safe to retry goes again after this; NULL: never
     ],
 }
 
@@ -140,21 +142,37 @@ class DB:
         sets = ", ".join(f"{k} = ?" for k in fields)
         self.execute(f"UPDATE {table} SET {sets} WHERE id = ?", (*fields.values(), row_id))
 
+    def update_if(self, table: str, row_id: int, expect: dict, **fields) -> bool:
+        """Update only while the row still holds the `expect` values. A worker that read a clip, then
+        spent seconds rendering or waiting on an AI call, must not overwrite what you (or another
+        worker) decided meanwhile. Returns whether the row was updated."""
+        if table == "clips":
+            fields.setdefault("updated_at", time.time())
+        sets = ", ".join(f"{k} = ?" for k in fields)
+        conds = "".join(f" AND {k} IS ?" for k in expect)
+        cur = self.execute(f"UPDATE {table} SET {sets} WHERE id = ?{conds}",
+                           (*fields.values(), row_id, *expect.values()))
+        return cur.rowcount > 0
+
     def claim_clip(self, from_status: str, to_status: str) -> sqlite3.Row | None:
-        """Atomically move the best-scored clip from one status to another."""
+        """Atomically move the best-scored clip from one status to another. Safe across processes
+        too: if another connection claims the same clip first, the next one is tried."""
         with self._lock:
-            row = self.conn.execute(
-                "SELECT * FROM clips WHERE status = ? ORDER BY score DESC, id ASC LIMIT 1",
-                (from_status,),
-            ).fetchone()
-            if not row:
-                return None
-            self.conn.execute(
-                "UPDATE clips SET status = ?, updated_at = ? WHERE id = ? AND status = ?",
-                (to_status, time.time(), row["id"], from_status),
-            )
-            self.conn.commit()
-            return row
+            for _ in range(10):
+                row = self.conn.execute(
+                    "SELECT * FROM clips WHERE status = ? ORDER BY score DESC, id ASC LIMIT 1",
+                    (from_status,),
+                ).fetchone()
+                if not row:
+                    return None
+                cur = self.conn.execute(
+                    "UPDATE clips SET status = ?, updated_at = ? WHERE id = ? AND status = ?",
+                    (to_status, time.time(), row["id"], from_status),
+                )
+                self.conn.commit()
+                if cur.rowcount:
+                    return row
+            return None
 
 
 def open_db(cfg: dict) -> DB:

@@ -62,6 +62,7 @@ class ClipMeta:
     quality: int = 0
     why: str = ""
     source: str = "template"
+    ai_error: str = ""  # why Claude didn't write it (call_json's reason), when source is "template"
 
     def to_json(self) -> str:
         return json.dumps(asdict(self))
@@ -157,6 +158,7 @@ def generate(
                             thinking=cfg["ai"].get("thinking", "off"))
     if data is None:
         meta = template_meta(channel_cfg, campaign, top_terms, transcript)
+        meta.ai_error = model
         if model == "refusal":
             meta.unsafe = True
             meta.why = "model declined to write copy for this clip; review manually"

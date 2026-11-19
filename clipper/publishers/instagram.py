@@ -207,7 +207,7 @@ class InstagramPublisher(Publisher):
         try:
             ok, msg = self.ready()
             if not ok:
-                return self._fail(msg.splitlines()[0])
+                return self._fail(msg.splitlines()[0], retry=True)
             return self._publish(Path(video), meta)
         except Exception as exc:  # never crash the scheduler
             msg = str(exc) if isinstance(exc, _ApiError) else f"{type(exc).__name__}: {exc}"
@@ -243,41 +243,18 @@ class InstagramPublisher(Publisher):
 
     # -- internals
 
-    def _fail(self, msg: str) -> PostResult:
-        return PostResult(ok=False, platform=self.name, status="error", error=msg[:300])
+    def _fail(self, msg: str, retry: bool = False) -> PostResult:
+        return PostResult(ok=False, platform=self.name, status="error", error=msg[:300], retry=retry)
 
     def _publish(self, video: Path, meta: PostMeta) -> PostResult:
         if not video.is_file():
             return self._fail(f"video not found: {video}")
-        size = video.stat().st_size
         ig_id = str(self._ig["ig_user_id"]).strip()
-
-        used, total = publishing_quota(
-            self._get(f"{ig_id}/content_publishing_limit", fields="config,quota_usage"))
-        if used >= total:
-            return self._fail(f"Instagram publishing limit reached ({used}/{total} in the last 24h)")
-
-        # A container accepts exactly one upload, so a failed upload is retried
-        # with a brand-new container rather than re-sending to the same one.
-        container_id = ""
-        for attempt in range(1, 4):
-            container = self._post(f"{ig_id}/media", retry=False,
-                                   **instagram_container_params(meta, self._ig))
-            container_id = container.get("id")
-            if not container_id:
-                return self._fail("Instagram did not return a container id")
-            upload_uri = container.get("uri") or (
-                f"{RUPLOAD_HOST}/ig-api-upload/{self._version()}/{container_id}")
-            try:
-                self._upload(upload_uri, video, size)
-                break
-            except _ApiError as exc:
-                log.warning("instagram upload attempt %d/3 failed (container %s): %s",
-                            attempt, container_id, exc)
-                if attempt == 3:
-                    raise
-                time.sleep(10 * attempt)
-        self._wait_finished(container_id)
+        try:  # nothing is on the account until media_publish: a failure before it can be retried
+            container_id = self._prepare(video, meta, ig_id)
+        except Exception as exc:
+            return self._fail(str(exc) if isinstance(exc, _ApiError) else f"{type(exc).__name__}: {exc}",
+                              retry=True)
 
         published = self._post(f"{ig_id}/media_publish", creation_id=container_id)
         media_id = published.get("id")
@@ -290,6 +267,37 @@ class InstagramPublisher(Publisher):
             log.warning("instagram permalink lookup failed: %s", exc)
         return PostResult(ok=True, platform=self.name, remote_id=media_id, url=url,
                           status="published")
+
+    def _prepare(self, video: Path, meta: PostMeta, ig_id: str) -> str:
+        """Upload into a container and wait until Instagram has processed it. Returns the container id."""
+        size = video.stat().st_size
+        used, total = publishing_quota(
+            self._get(f"{ig_id}/content_publishing_limit", fields="config,quota_usage"))
+        if used >= total:
+            raise _ApiError(f"Instagram publishing limit reached ({used}/{total} in the last 24h)")
+
+        # A container accepts exactly one upload, so a failed upload is retried
+        # with a brand-new container rather than re-sending to the same one.
+        container_id = ""
+        for attempt in range(1, 4):
+            container = self._post(f"{ig_id}/media", retry=False,
+                                   **instagram_container_params(meta, self._ig))
+            container_id = container.get("id")
+            if not container_id:
+                raise _ApiError("Instagram did not return a container id")
+            upload_uri = container.get("uri") or (
+                f"{RUPLOAD_HOST}/ig-api-upload/{self._version()}/{container_id}")
+            try:
+                self._upload(upload_uri, video, size)
+                break
+            except _ApiError as exc:
+                log.warning("instagram upload attempt %d/3 failed (container %s): %s",
+                            attempt, container_id, exc)
+                if attempt == 3:
+                    raise
+                time.sleep(10 * attempt)
+        self._wait_finished(container_id)
+        return container_id
 
     def _upload(self, uri: str, video: Path, size: int) -> None:
         def attempt() -> dict:

@@ -188,13 +188,22 @@ def prune(seg_dir: Path, retain_seconds: float, now: float | None = None) -> int
     now = now or time.time()
     removed = 0
     segs = list_segments(seg_dir)
-    for start, path in segs[:-2]:  # never touch the newest (being written)
+    try:  # nothing written for longer than we keep segments: the session ended, its last two can go too
+        ended = bool(segs) and now - segs[-1][1].stat().st_mtime > retain_seconds
+    except OSError:
+        ended = False
+    for start, path in (segs if ended else segs[:-2]):  # never touch the newest (being written)
         if now - start > retain_seconds:
             try:
                 path.unlink()
                 removed += 1
             except OSError:
                 pass
+    if ended:
+        try:
+            seg_dir.rmdir()  # only if empty
+        except OSError:
+            pass
     return removed
 
 

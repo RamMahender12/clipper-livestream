@@ -40,6 +40,26 @@ CREATE INDEX IF NOT EXISTS ai_usage_day ON ai_usage(day);
 _lock = threading.Lock()
 _alerted: dict[str, float] = {}
 
+# call_json failures that say nothing about the clip: the same call can work later (the cap resets at
+# 00:00 UTC, credits get topped up, the network or a key comes back). These cost nothing, so callers
+# try again; refusal, bad-json and other 4xx answers are about the clip and wait for a human.
+TEMPORARY = {"budget", "no-credit", "rate-limit", "connection", "auth", "api-429", "api-529"}
+
+
+def temporary(reason: str) -> bool:
+    return reason in TEMPORARY or reason.startswith("api-5")
+
+
+def available(cfg: dict) -> tuple[bool, str]:
+    """Would a Claude call go out right now? Makes no call."""
+    ai = cfg["ai"]
+    if not ai.get("enabled") or not have_credentials():
+        return False, "no-credentials"
+    budget = float(ai.get("daily_budget_usd", 0) or 0)
+    if budget and spent_today(cfg) >= budget:
+        return False, "budget"
+    return True, ""
+
 
 def have_credentials() -> bool:
     return bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")

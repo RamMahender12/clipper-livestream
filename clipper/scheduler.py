@@ -2,6 +2,8 @@
 view counts fresh for the earnings scoreboard."""
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
 import logging
 import threading
@@ -23,11 +25,48 @@ def _clip_dict(row) -> dict:
     return d
 
 
+RETRY_MINUTES = [10, 30, 90]  # waits before upload tries 2, 3 and 4 ([posting].retry_minutes)
+
+
+@contextlib.contextmanager
+def _posting_lock(cfg: dict):
+    """One posting pass at a time, across processes too: `clipper post` run while the service is
+    up would otherwise upload the same clip to the same account twice."""
+    path = config_mod.data_dir(cfg) / "posting.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as fh:
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
+
 def post_once(db: DB, cfg: dict) -> list[str]:
     """One pass: each account with a free slot posts its best eligible clip.
     Every streamer posts to its own accounts; a pass posts at most one clip
     per account, then sends one Telegram alert listing what to submit."""
-    from . import notify
+    with _posting_lock(cfg) as mine:
+        if not mine:
+            return ["another posting pass is running (the background service posts on its own): nothing done"]
+        return _post_once(db, cfg)
+
+
+def _retry_note(cfg: dict, retry_at: float | None, safe: bool, attempts: int) -> str:
+    if retry_at:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        tz = ZoneInfo(cfg["posting"].get("timezone", "UTC"))
+        return f"trying again at {datetime.fromtimestamp(retry_at, tz):%H:%M}"
+    return f"gave up after {attempts} tries" if safe else "not retried automatically"
+
+
+def _post_once(db: DB, cfg: dict) -> list[str]:
     from .publishers import channel_account, get_publisher
     from .publishers.base import PostMeta
 
@@ -35,6 +74,7 @@ def post_once(db: DB, cfg: dict) -> list[str]:
     posted: list[dict] = []
     failed: list[str] = []
     platforms = cfg["posting"]["platforms"]
+    delays = [float(m) for m in cfg["posting"].get("retry_minutes", RETRY_MINUTES)]
     # human approvals first, then the clips expected to do best
     approved = [_clip_dict(r) for r in db.query(
         "SELECT * FROM clips WHERE status = 'approved' ORDER BY (decided_by = 'human') DESC, "
@@ -44,7 +84,10 @@ def post_once(db: DB, cfg: dict) -> list[str]:
         used: set[str] = set()       # accounts that already posted this pass
         blocked: dict[str, str] = {}  # account -> why it can't post now
         for clip in approved:
-            if db.one("SELECT id FROM posts WHERE clip_id = ? AND platform = ?", (clip["id"], platform)):
+            prev = db.one("SELECT id, status, attempts, retry_at FROM posts WHERE clip_id = ? AND platform = ?",
+                          (clip["id"], platform))
+            # already there, or a failure that isn't safe (or not yet time) to try again
+            if prev and not (prev["status"] == "error" and prev["retry_at"] and prev["retry_at"] <= time.time()):
                 continue
             if clip.get("decided_by") == "auto" and time.time() - (clip.get("decided_at") or 0) < veto:
                 continue  # still inside the undo window
@@ -77,26 +120,38 @@ def post_once(db: DB, cfg: dict) -> list[str]:
                 is_paid_promotion=bool(camp and camp.get("paid_promotion", True)),
                 clip_id=clip["id"],
             )
+            # uploads earlier in this pass take minutes: you may have undone or rejected it meanwhile
+            now_row = db.one("SELECT status, decided_by, decided_at FROM clips WHERE id = ?", (clip["id"],))
+            if not now_row or now_row["status"] != "approved" or (
+                    now_row["decided_by"] == "auto" and time.time() - (now_row["decided_at"] or 0) < veto):
+                continue
             result = pub.publish(Path(clip["final_path"]), meta)
             # the channel's current campaign: a clip cut before joining still counts
             campaign_id = (camp or {}).get("id", "") or clip["campaign_id"] or ""
             if campaign_id and campaign_id != clip["campaign_id"]:
                 db.update("clips", clip["id"], campaign_id=campaign_id)
-            db.insert(
-                "posts", clip_id=clip["id"], platform=platform, account=account,
-                campaign_id=campaign_id, remote_id=result.remote_id,
-                url=result.url, status=result.status if result.ok else "error",
-                error=result.error[:500], posted_at=time.time(),
-            )
+            attempts = int(prev["attempts"] or 1) + 1 if prev else 1
+            safe = not result.ok and result.retry
+            retry_at = time.time() + delays[attempts - 1] * 60 if safe and attempts <= len(delays) else None
+            fields = dict(account=account, campaign_id=campaign_id, remote_id=result.remote_id,
+                          url=result.url, status=result.status if result.ok else "error",
+                          error=result.error[:500], posted_at=time.time(), attempts=attempts, retry_at=retry_at)
+            if prev:
+                db.update("posts", prev["id"], **fields)
+            else:
+                db.insert("posts", clip_id=clip["id"], platform=platform, **fields)
             used.add(account)
             if result.ok:
                 line = f"{platform}/{clip['channel']}: clip {clip['id']} -> {result.status} {result.url}"
+                if attempts > 1:
+                    line += f" (try {attempts})"
                 if platform != "export" and result.status == "published":
                     posted.append({"campaign": camp, "platform": platform, "url": result.url,
                                    "clip_id": clip["id"], "hook": clip.get("hook", "")})
             else:
-                line = f"{platform}/{clip['channel']}: clip {clip['id']} failed: {result.error}"
-                failed.append(f"{platform} @ {clip['channel']}, clip {clip['id']}: {result.error[:200]}")
+                note = _retry_note(cfg, retry_at, safe, attempts)
+                line = f"{platform}/{clip['channel']}: clip {clip['id']} failed ({note}): {result.error}"
+                failed.append(f"{platform} @ {clip['channel']}, clip {clip['id']} ({note}): {result.error[:200]}")
             log.info(line)
             log_lines.append(line)
         log_lines.extend(blocked.values())
@@ -126,20 +181,26 @@ def _mark_fully_posted(db: DB, cfg: dict) -> None:
 def refresh_stats(db: DB, cfg: dict) -> int:
     from .publishers import get_publisher
 
-    n = 0
+    from .publishers.base import stats_many
+
+    # one batch per account: YouTube reads 50 videos per quota unit instead of one
+    groups: dict[tuple[str, str], list] = {}
     for post in db.query("SELECT p.*, c.channel FROM posts p JOIN clips c ON c.id = p.clip_id "
                          "WHERE p.status = 'published' AND p.remote_id != ''"):
-        ch = config_mod.channel(cfg, post["channel"])
-        pub = get_publisher(post["platform"], cfg, ch)
+        groups.setdefault((post["platform"], post["channel"]), []).append(post)
+    n = 0
+    for (platform, channel), posts in groups.items():
+        pub = get_publisher(platform, cfg, config_mod.channel(cfg, channel))
         try:
-            stats = pub.fetch_stats(post["remote_id"])
+            found = stats_many(pub, [p["remote_id"] for p in posts])
         except Exception as exc:
-            log.warning("stats %s/%s failed: %s", post["platform"], post["remote_id"], exc)
+            log.warning("stats %s/%s failed: %s", platform, channel, exc)
             continue
-        if stats:
-            db.update("posts", post["id"], views=stats.views, likes=stats.likes,
-                      comments=stats.comments, stats_at=time.time())
-            n += 1
+        for post in posts:
+            if stats := found.get(post["remote_id"]):
+                db.update("posts", post["id"], views=stats.views, likes=stats.likes,
+                          comments=stats.comments, stats_at=time.time())
+                n += 1
     return n
 
 

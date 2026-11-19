@@ -82,16 +82,20 @@ def process_clip(db: DB, cfg: dict, clip: dict) -> None:
         sample = json.loads(spike["sample"]) if spike and spike["sample"] else []
         meta = metadata.generate(cfg, ch, camp, captions.transcript_text(words), terms, sample,
                                  context=clip.get("source_note") or "")
+        notes = {"take": meta.take, "why": meta.why, "unsafe": meta.unsafe, "source": meta.source,
+                 # Claude's own verdict, kept apart from the combined one
+                 "claude_quality": meta.quality, "claude_spoiler": meta.spoiler_risk,
+                 "claude_unsafe": meta.unsafe}
+        if meta.source == "template" and meta.ai_error:
+            # Claude was down or over its cap: redo_after_outage writes it properly once it's back
+            notes.update(packaging_error=meta.ai_error, template_hook=meta.hook)
+        prev = _notes(clip)
+        notes.update({k: prev[k] for k in ("ai_redos", "ai_redo_at") if k in prev})
         db.update(
             "clips", clip_id,
             hook=meta.hook, title=meta.title, caption=meta.caption,
             hashtags=",".join(meta.hashtags), spoiler_risk=meta.spoiler_risk,
-            quality=meta.quality,
-            ai_notes=json.dumps({"take": meta.take, "why": meta.why, "unsafe": meta.unsafe,
-                                 "source": meta.source,
-                                 # Claude's own verdict, kept apart from the combined one
-                                 "claude_quality": meta.quality, "claude_spoiler": meta.spoiler_risk,
-                                 "claude_unsafe": meta.unsafe}),
+            quality=meta.quality, ai_notes=json.dumps(notes),
         )
         hook = meta.hook
         # a weak chat-spike moment stops here: no render, video check or judge. Claude's transcript
@@ -99,9 +103,9 @@ def process_clip(db: DB, cfg: dict, clip: dict) -> None:
         # Viewer clips always go on: Claude underrates visual moments it can only read about.
         floor = int(cfg["ai"].get("min_quality_to_render", 0))
         if clip.get("spike_id") and meta.source != "template" and meta.quality < floor:
-            db.update("clips", clip_id, status="rejected", decided_by="auto", decided_at=time.time(),
-                      decision_note=f"Weak moment: Claude rated it {meta.quality}/10 from the transcript "
-                                    f"(needs {floor} to be rendered and reviewed)")
+            _finish(db, clip_id, status="rejected", decided_by="auto", decided_at=time.time(),
+                    decision_note=f"Weak moment: Claude rated it {meta.quality}/10 from the transcript "
+                                  f"(needs {floor} to be rendered and reviewed)")
             log.info("clip %s: skipped, Claude rated it %s/10", clip_id, meta.quality)
             return
     else:
@@ -109,16 +113,98 @@ def process_clip(db: DB, cfg: dict, clip: dict) -> None:
 
     # 3. captions + render, then Gemini watches the result
     render_final(db, cfg, clip_id, ch, src, start, dur, words, hook)
+    # our own hook (never one you wrote) gets fixed if the video check says it misleads
+    check_and_finish(db, cfg, clip_id, own_hook=not clip["hook"])
+
+
+def _notes(row: dict) -> dict:
+    try:
+        return json.loads(row.get("ai_notes") or "{}")
+    except json.JSONDecodeError:
+        return {}
+
+
+def _finish(db: DB, clip_id: int, **fields) -> bool:
+    """Leave the rendering state, unless you decided on the clip while it rendered."""
+    return db.update_if("clips", clip_id, {"status": "rendering"}, **fields)
+
+
+def check_and_finish(db: DB, cfg: dict, clip_id: int, own_hook: bool) -> None:
+    """The steps after a render: video check, cut violence and music, sharper hook, then ready."""
     gemini_review(db, cfg, clip_id)  # second opinion on the finished video
     if cut_violence(db, cfg, clip_id) == "mostly":
-        db.update("clips", clip_id, status="rejected", decided_by="auto", decided_at=time.time(),
-                  decision_note="Dropped: mostly violence (YouTube age-restricts it), nothing clean enough to keep")
+        _finish(db, clip_id, status="rejected", decided_by="auto", decided_at=time.time(),
+                decision_note="Dropped: mostly violence (YouTube age-restricts it), nothing clean enough to keep")
         log.info("clip %s dropped: mostly violence", clip_id)
         return
-    if not clip["hook"]:  # our own hook (never one you wrote): fix it if the video check says it misleads
+    if own_hook:
         swap_hook(db, cfg, clip_id)
-    db.update("clips", clip_id, status="ready")
-    log.info("clip %s ready", clip_id)
+    if _finish(db, clip_id, status="ready"):
+        log.info("clip %s ready", clip_id)
+    else:
+        log.info("clip %s: you decided on it while it rendered; leaving your decision", clip_id)
+
+
+AI_REDOS = 3            # tries per clip at a step Claude/Gemini couldn't do
+AI_REDO_GAP = 15 * 60   # seconds between tries
+
+
+def _redo_step(cfg: dict, row: dict, notes: dict) -> str:
+    """'package' or 'check' when that step fell through for a reason that wasn't the clip's fault."""
+    from . import ai, gemini
+
+    if notes.get("source", "template") == "template":
+        own = (row.get("hook") or "") == notes.get("template_hook")  # not a hook you typed since
+        return "package" if own and ai.temporary(notes.get("packaging_error", "")) else ""
+    if notes.get("gemini") or not notes.get("gemini_error") or not gemini.configured(cfg):
+        return ""
+    if notes.get("claude_unsafe", notes.get("unsafe")):  # never sent for a video check on purpose
+        return ""
+    return "check"
+
+
+def redo_after_outage(db: DB, cfg: dict, now: float | None = None) -> int | None:
+    """When Claude was down or over its daily cap, a clip got template packaging or no video check,
+    and the auto-approver can only hold it for you. Once AI is back, redo that step (best clip first,
+    at most AI_REDOS times each), so the clip gets a real review instead of waiting forever. The
+    render worker calls this when it has nothing queued, so fresh clips always go first.
+    Returns the clip id it worked on, or None."""
+    from . import ai, gemini
+
+    now = now or time.time()
+    up = ai.available(cfg)[0]
+    rows = db.query(
+        "SELECT * FROM clips WHERE status = 'ready' AND COALESCE(decided_by, '') != 'human' "
+        "AND (ai_notes LIKE '%packaging_error%' OR ai_notes LIKE '%gemini_error%') "
+        "ORDER BY score DESC, id ASC")
+    for r in rows:
+        clip = dict(r)
+        notes = _notes(clip)
+        step = _redo_step(cfg, clip, notes)
+        tries = int(notes.get("ai_redos", 0))
+        if not step or tries >= AI_REDOS or now - float(notes.get("ai_redo_at", 0)) < AI_REDO_GAP:
+            continue
+        if (step == "package" or cfg["gemini"].get("backend") == "claude") and not up:
+            continue
+        if step == "check" and gemini.BREAKER.paused():
+            continue
+        notes.update(ai_redos=tries + 1, ai_redo_at=now)
+        if not db.update_if("clips", clip["id"], {"status": "ready", "updated_at": clip["updated_at"]},
+                            status="rendering", ai_notes=json.dumps(notes)):
+            continue  # you acted on it just now
+        log.info("clip %s: AI is back, redoing the %s (try %d)", clip["id"],
+                 "packaging" if step == "package" else "video check", tries + 1)
+        try:
+            if step == "package":
+                clip.update(hook="", ai_notes=json.dumps(notes), status="rendering")
+                process_clip(db, cfg, clip)
+            else:
+                check_and_finish(db, cfg, clip["id"], own_hook=True)
+        except Exception as exc:  # keep the clip as it was, still reviewable by you
+            log.warning("clip %s: redo failed: %s", clip["id"], exc)
+            _finish(db, clip["id"], status="ready")
+        return clip["id"]
+    return None
 
 
 def clean_window(duration: float, spans: list, pad: float) -> tuple[float, float]:
@@ -390,21 +476,37 @@ def drop_stale(db: DB, cfg: dict, now: float | None = None) -> int:
 class RenderWorker(threading.Thread):
     def __init__(self, db: DB, cfg: dict, stop: threading.Event, idx: int = 0):
         super().__init__(daemon=True, name=f"render-{idx}")
-        self.db, self.cfg, self.stop_event = db, cfg, stop
+        self.db, self.cfg, self.stop_event, self.idx = db, cfg, stop, idx
 
     def run(self) -> None:
+        from . import retention
+
+        last_redo = last_clean = 0.0
         while not self.stop_event.is_set():
             if dropped := drop_stale(self.db, self.cfg):
                 log.info("dropped %s stale queued clip(s)", dropped)
+            if self.idx == 0 and time.time() - last_clean > 3600:  # one worker keeps the disk tidy
+                last_clean = time.time()
+                try:
+                    retention.housekeeping(self.db, self.cfg)
+                except Exception:
+                    log.exception("media cleanup failed")
             row = self.db.claim_clip("queued", "rendering")
             if not row:
+                if time.time() - last_redo > 60:  # idle: catch up on clips AI couldn't review earlier
+                    last_redo = time.time()
+                    try:
+                        if redo_after_outage(self.db, self.cfg):
+                            continue
+                    except Exception:
+                        log.exception("redo after AI outage failed")
                 self.stop_event.wait(2)
                 continue
             try:
                 process_clip(self.db, self.cfg, dict(row))
             except Exception as exc:
                 log.exception("clip %s failed", row["id"])
-                self.db.update("clips", row["id"], status="failed", error=str(exc)[:1000])
+                _finish(self.db, row["id"], status="failed", error=str(exc)[:1000])
 
 
 def drain_queue(db: DB, cfg: dict) -> int:
@@ -419,4 +521,4 @@ def drain_queue(db: DB, cfg: dict) -> int:
             n += 1
         except Exception as exc:
             log.exception("clip %s failed", row["id"])
-            db.update("clips", row["id"], status="failed", error=str(exc)[:1000])
+            _finish(db, row["id"], status="failed", error=str(exc)[:1000])

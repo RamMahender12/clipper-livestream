@@ -78,6 +78,29 @@ class _SessionExpired(Exception):
     pass
 
 
+class _NoVideo(_ApiError):
+    """Failed before YouTube could have created a video (no upload session, or the session expired):
+    safe to try again later."""
+
+
+BATCH = 50  # videos.list takes up to 50 ids per call
+
+
+def _video_state(item: dict | None) -> tuple[str, str]:
+    if not item:
+        return "removed", "the video no longer exists on YouTube (deleted or taken down)"
+    st, cd = item.get("status", {}), item.get("contentDetails", {})
+    if st.get("uploadStatus") in ("rejected", "deleted", "failed"):
+        why = st.get("rejectionReason") or st.get("failureReason") or st.get("uploadStatus")
+        return "rejected", f"YouTube {st.get('uploadStatus')} it: {why}"
+    blocked = (cd.get("regionRestriction") or {}).get("blocked") or []
+    if blocked:
+        return "blocked", f"blocked in {len(blocked)} countries (usually a music or Content ID claim)"
+    if (cd.get("contentRating") or {}).get("ytRating") == "ytAgeRestricted":
+        return "age", "age-restricted by YouTube"
+    return "ok", ""
+
+
 # ---------------------------------------------------------------- HTTP helpers
 
 
@@ -375,50 +398,58 @@ class YouTubePublisher(Publisher):
                               url=f"https://youtube.com/shorts/{video_id}", status="published")
         except Exception as exc:  # never crash the scheduler
             msg = str(exc) if isinstance(exc, _ApiError) else f"{type(exc).__name__}: {exc}"
-            return PostResult(ok=False, platform=self.name, status="error", error=msg[:300])
+            return PostResult(ok=False, platform=self.name, status="error", error=msg[:300],
+                              retry=isinstance(exc, _NoVideo))
+
+    def _videos(self, part: str, ids: list[str]) -> dict[str, dict]:
+        """videos.list for up to 50 ids in one call (1 quota unit however many ids): id -> item.
+        Raises _ApiError when the call fails."""
+        query = urllib.parse.urlencode({"part": part, "id": ",".join(ids)})
+        status, _, body = _request("GET", f"{API_URL}/videos?{query}", headers={
+            "Authorization": f"Bearer {_access_token(self.cfg)}"})
+        if status != 200:
+            raise _ApiError(_error_text(status, body))
+        items = json.loads(body).get("items") or []
+        by_id = {it["id"]: it for it in items if it.get("id")}
+        if len(ids) == 1 and items and not by_id:
+            by_id[ids[0]] = items[0]
+        return by_id
+
+    def fetch_stats_many(self, remote_ids: list[str]) -> dict[str, PostStats]:
+        out: dict[str, PostStats] = {}
+        for i in range(0, len(remote_ids), BATCH):
+            chunk = remote_ids[i:i + BATCH]
+            try:
+                found = self._videos("statistics", chunk)
+            except Exception as exc:
+                log.warning("youtube stats for %d videos failed: %s", len(chunk), exc)
+                continue
+            for rid, item in found.items():
+                s = item.get("statistics", {})
+                out[rid] = PostStats(views=int(s.get("viewCount", 0)), likes=int(s.get("likeCount", 0)),
+                                     comments=int(s.get("commentCount", 0)))
+        return out
 
     def fetch_stats(self, remote_id: str) -> PostStats | None:
-        try:
-            query = urllib.parse.urlencode({"part": "statistics", "id": remote_id})
-            status, _, body = _request("GET", f"{API_URL}/videos?{query}", headers={
-                "Authorization": f"Bearer {_access_token(self.cfg)}"})
-            if status != 200:
-                log.warning("youtube stats %s: %s", remote_id, _error_text(status, body))
-                return None
-            items = json.loads(body).get("items") or []
-            if not items:
-                return None
-            s = items[0].get("statistics", {})
-            return PostStats(views=int(s.get("viewCount", 0)), likes=int(s.get("likeCount", 0)),
-                             comments=int(s.get("commentCount", 0)))
-        except Exception as exc:
-            log.warning("youtube stats %s failed: %s", remote_id, exc)
-            return None
+        return self.fetch_stats_many([remote_id]).get(remote_id)
+
+    def check_status_many(self, remote_ids: list[str]) -> dict[str, tuple[str, str]]:
+        """Is each Short still up? Removed (missing), rejected (with YouTube's reason), blocked in
+        some countries (usually a music claim), or age-restricted. 50 videos per call."""
+        out: dict[str, tuple[str, str]] = {}
+        for i in range(0, len(remote_ids), BATCH):
+            chunk = remote_ids[i:i + BATCH]
+            try:
+                found = self._videos("status,contentDetails", chunk)
+            except Exception as exc:  # never call a video removed because the API hiccuped
+                out.update({rid: ("unknown", str(exc)[:150]) for rid in chunk})
+                continue
+            for rid in chunk:
+                out[rid] = _video_state(found.get(rid))
+        return out
 
     def check_status(self, remote_id: str) -> tuple[str, str]:
-        """Is the Short still up? Removed (missing), rejected (with YouTube's reason), blocked in some
-        countries (usually a music claim), or age-restricted."""
-        try:
-            query = urllib.parse.urlencode({"part": "status,contentDetails", "id": remote_id})
-            status, _, body = _request("GET", f"{API_URL}/videos?{query}", headers={
-                "Authorization": f"Bearer {_access_token(self.cfg)}"})
-        except Exception as exc:
-            return "unknown", str(exc)[:150]
-        if status != 200:
-            return "unknown", _error_text(status, body)[:150]
-        items = json.loads(body).get("items") or []
-        if not items:
-            return "removed", "the video no longer exists on YouTube (deleted or taken down)"
-        st, cd = items[0].get("status", {}), items[0].get("contentDetails", {})
-        if st.get("uploadStatus") in ("rejected", "deleted", "failed"):
-            why = st.get("rejectionReason") or st.get("failureReason") or st.get("uploadStatus")
-            return "rejected", f"YouTube {st.get('uploadStatus')} it: {why}"
-        blocked = (cd.get("regionRestriction") or {}).get("blocked") or []
-        if blocked:
-            return "blocked", f"blocked in {len(blocked)} countries (usually a music or Content ID claim)"
-        if (cd.get("contentRating") or {}).get("ytRating") == "ytAgeRestricted":
-            return "age", "age-restricted by YouTube"
-        return "ok", ""
+        return self.check_status_many([remote_id])[remote_id]
 
     # -- internals
 
@@ -431,7 +462,10 @@ class YouTubePublisher(Publisher):
         mime = "video/mp4" if video.suffix.lower() == ".mp4" else "application/octet-stream"
         ycfg = self.cfg.get("youtube", {})
         for _ in range(2):  # a 404 mid-upload means the session expired: start over once
-            session = self._start_session(meta, ycfg, size, mime)
+            try:  # no session, no video: anything failing here (token, quota, network) can be retried
+                session = self._start_session(meta, ycfg, size, mime)
+            except Exception as exc:
+                raise _NoVideo(str(exc) if isinstance(exc, _ApiError) else f"{type(exc).__name__}: {exc}") from exc
             try:
                 resource = self._upload(session, video, size, mime)
             except _SessionExpired:
@@ -440,7 +474,7 @@ class YouTubePublisher(Publisher):
             if not video_id:
                 raise _ApiError("upload finished but YouTube returned no video id")
             return video_id
-        raise _ApiError("YouTube upload session expired twice")
+        raise _NoVideo("YouTube upload session expired twice")
 
     def _start_session(self, meta: PostMeta, ycfg: dict, size: int, mime: str) -> str:
         url, headers, body = youtube_init_request(meta, ycfg, size, mime)

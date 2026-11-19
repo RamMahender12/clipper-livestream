@@ -66,4 +66,4 @@ class ExportPublisher(Publisher):
                               url=dest.resolve().as_uri(), status="exported")
         except OSError as exc:
             return PostResult(ok=False, platform=self.name, status="error",
-                              error=f"export failed: {exc}"[:300])
+                              error=f"export failed: {exc}"[:300], retry=True)  # a local copy: no duplicates

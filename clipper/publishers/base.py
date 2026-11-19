@@ -5,8 +5,11 @@ the fastest way to get banned and they break the platforms' terms.
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -26,6 +29,9 @@ class PostResult:
     url: str = ""
     status: str = ""  # "published" | "draft" | "exported" | "error"
     error: str = ""
+    # failed before anything reached the account (no video created): trying again later can't
+    # make a duplicate post. Leave False when unsure; duplicates look like spam to the platforms.
+    retry: bool = False
 
 
 @dataclass
@@ -55,6 +61,33 @@ class Publisher:
     def check_status(self, remote_id: str) -> tuple[str, str]:
         """(state, detail) of a live post: ok, removed, rejected, blocked, age, or unknown."""
         return "unknown", "not supported for this platform"
+
+
+def stats_many(pub, remote_ids: list[str]) -> dict[str, PostStats]:
+    """Stats for many posts: one batched call where the publisher has one (YouTube), else one each."""
+    if hasattr(pub, "fetch_stats_many"):
+        return pub.fetch_stats_many(remote_ids)
+    out = {}
+    for rid in remote_ids:
+        try:
+            if s := pub.fetch_stats(rid):
+                out[rid] = s
+        except Exception as exc:
+            log.warning("stats %s/%s failed: %s", getattr(pub, "name", "?"), rid, exc)
+    return out
+
+
+def status_many(pub, remote_ids: list[str]) -> dict[str, tuple[str, str]]:
+    """check_status for many posts, batched where the publisher can (YouTube)."""
+    if hasattr(pub, "check_status_many"):
+        return pub.check_status_many(remote_ids)
+    out = {}
+    for rid in remote_ids:
+        try:
+            out[rid] = pub.check_status(rid)
+        except Exception as exc:
+            out[rid] = ("unknown", str(exc)[:150])
+    return out
 
 
 def caption_with_tags(meta: PostMeta, limit: int = 2200) -> str:

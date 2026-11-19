@@ -427,6 +427,11 @@ class Breaker:
             self.calls.append(now)
             return True, ""
 
+    def paused(self) -> bool:
+        """Paused after failures (unlike allow(), uses up no call)."""
+        with self.lock:
+            return time.time() < self.until
+
     def ok(self) -> None:
         with self.lock:
             self.fails = 0

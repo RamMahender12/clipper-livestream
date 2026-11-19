@@ -76,12 +76,22 @@ platforms = ["export"]
 min_gap_minutes = 45
 quiet_hours = []           # local hours with no posting, e.g. [3, 4, 5]
 timezone = "Asia/Kolkata"
+# An upload that failed before anything reached the account (token, quota, network at the start)
+# is tried again after these waits. One that may have gone up (e.g. YouTube lost contact after the
+# last bytes) is never retried on its own: a duplicate post looks like spam.
+retry_minutes = [10, 30, 90]
 
 [posting.max_posts_per_day]
 youtube = 10
 instagram = 8
 tiktok = 5                 # TikTok allows ~5 pending inbox drafts per 24h
 export = 1000
+
+[retention]                # media of clips that are done (posted, rejected, failed); live clips are never touched
+raw_hours = 24             # raw cuts (~60 MB each) are deleted this long after the clip is done
+rejected_days = 3          # rendered mp4s of rejected/failed clips (thumbnails stay)
+posted_days = 14           # rendered mp4s of posted clips
+min_free_gb = 5            # under this: delete all of the above now and alert on Telegram
 
 # ---------------------------------------------------------------------------
 # Campaigns: paid clipping programs you've joined (Whop Content Rewards etc.).

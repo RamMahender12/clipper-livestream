@@ -26,7 +26,7 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 
-from . import config as config_mod, guardrails
+from . import ai, config as config_mod, guardrails
 from .ai import call_json
 from .db import DB
 
@@ -344,12 +344,13 @@ def run_once(db: DB, cfg: dict, dry_run: bool = False) -> list[str]:
     expire = float(acfg.get("expire_hours", 0)) * 3600
     if expire and not dry_run:
         stale = db.query(
-            "SELECT id FROM clips WHERE status = 'ready' AND COALESCE(decided_by, '') != 'human' "
+            "SELECT id, updated_at FROM clips WHERE status = 'ready' AND COALESCE(decided_by, '') != 'human' "
             "AND created_at < ?", (now - expire,))
         for r in stale:
-            db.update("clips", r["id"], status="rejected", decided_by="auto", decided_at=now,
-                      decision_note=f"Expired: still unposted after {acfg['expire_hours']}h")
-            lines.append(f"clip {r['id']}: expired")
+            if db.update_if("clips", r["id"], {"status": "ready", "updated_at": r["updated_at"]},
+                            status="rejected", decided_by="auto", decided_at=now,
+                            decision_note=f"Expired: still unposted after {acfg['expire_hours']}h"):
+                lines.append(f"clip {r['id']}: expired")
 
     history, platform_views = load_history(db, cfg, now)
     approved_today = approved_in_last_day(db, now)
@@ -374,6 +375,7 @@ def run_once(db: DB, cfg: dict, dry_run: bool = False) -> list[str]:
                       if twitch_clips.evidence(cfg, clip) == "strong" else None)
         quality = int(clip.get("quality") or 0)
         why_not = below_bar(acfg, est, quality, viewer_bar)
+        retry = False
         if gate_ok and why_not:
             # it can't be approved whatever the judge says: don't pay for a judge call
             d = Decision("reject" if acfg.get("auto_reject", True) else "hold", f"Below the bar, not judged: {why_not}")
@@ -381,18 +383,29 @@ def run_once(db: DB, cfg: dict, dry_run: bool = False) -> list[str]:
             judge, err = judge_clip(cfg, clip, notes, ch, camp, history, est) if gate_ok else (None, "")
             d = decide(acfg, gate_ok, gate_reason, judge, err, est, quality, approved_today,
                        cold_start_min_quality=viewer_bar)
+            # Claude was down, rate-limited or over today's cap: nothing is wrong with the clip, so
+            # look again next pass (these failures cost nothing) instead of holding it for good
+            retry = judge is None and gate_ok and ai.temporary(err)
+            if retry:
+                d = Decision("hold", f"{d.note}; trying again automatically")
         lines.append(f"clip {clip['id']}: {d.action.upper()} - {d.note}")
         if dry_run:
             continue
         t = time.time()
-        fields = dict(auto_checked_at=t, updated_at=t, decision_note=d.note[:1500],
-                      expected_views=est.expected_views)
+        fields = dict(updated_at=t, decision_note=d.note[:1500], expected_views=est.expected_views)
+        if not retry:
+            fields["auto_checked_at"] = t
         if d.action == "approve":
             fields.update(status="approved", decided_by="auto", decided_at=t)
-            approved_today += 1
         elif d.action == "reject":
             fields.update(status="rejected", decided_by="auto", decided_at=t)
-        db.update("clips", clip["id"], **fields)
+        # you may have approved, rejected or edited it while the judge was thinking: yours wins
+        if not db.update_if("clips", clip["id"], {"status": "ready", "updated_at": clip["updated_at"]}, **fields):
+            lines[-1] += " (not applied: the clip changed during the review)"
+            log.info("auto-review clip %s: changed meanwhile, %s not applied", clip["id"], d.action)
+            continue
+        if d.action == "approve":
+            approved_today += 1
         log.info("auto-review clip %s: %s", clip["id"], d.action)
     return lines
 
