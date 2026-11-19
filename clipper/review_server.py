@@ -54,7 +54,7 @@ a{color:var(--accent)}
 @media (max-width:420px){main{padding:10px;grid-template-columns:1fr}}
 </style></head><body>
 <header>
-  <h1>GTA 6 Clip Review</h1>
+  <h1>GTA 6 Clip Review</h1><a href="/stats" style="color:var(--accent);text-decoration:none;margin-right:8px">📊 Stats</a>
   <span class="stat" id="stats"></span>
   <nav id="tabs"></nav>
   <div id="watch"></div>
@@ -215,6 +215,19 @@ def make_handler(db: DB, cfg: dict, watchers: list):
                         "SELECT id, platform, url, status, error, views FROM posts WHERE clip_id = ?", (r["id"],))]
                     out.append(d)
                 self._json(out)
+            elif url.path == "/stats":
+                from .stats_page import STATS_PAGE
+
+                body = STATS_PAGE.encode()
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            elif url.path == "/api/stats":
+                from . import stats
+
+                self._json(stats.build(db, cfg))
             elif url.path == "/api/summary":
                 s = scheduler.earnings_summary(db, cfg)
                 s["watchers"] = [f"{w.login}: {w.status}" for w in watchers]

@@ -39,6 +39,16 @@ CREATE INDEX IF NOT EXISTS ai_usage_day ON ai_usage(day);
 """
 _lock = threading.Lock()
 _alerted: dict[str, float] = {}
+_ctx = threading.local()
+
+
+def set_channel(channel: str | None) -> None:
+    """Which streamer the following Claude calls on this thread are for (spend per campaign)."""
+    _ctx.channel = channel or ""
+
+
+def current_channel() -> str:
+    return getattr(_ctx, "channel", "") or ""
 
 # call_json failures that say nothing about the clip: the same call can work later (the cap resets at
 # 00:00 UTC, credits get topped up, the network or a key comes back). These cost nothing, so callers
@@ -85,6 +95,8 @@ def _db(cfg: dict) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(path), timeout=30)
     conn.executescript(USAGE_SCHEMA)
+    if "channel" not in {r[1] for r in conn.execute("PRAGMA table_info(ai_usage)")}:
+        conn.execute("ALTER TABLE ai_usage ADD COLUMN channel TEXT DEFAULT ''")
     return conn
 
 
@@ -112,8 +124,8 @@ def record(cfg: dict, purpose: str, model: str, usage) -> float:
         conn = _db(cfg)
         try:
             conn.execute("INSERT INTO ai_usage (ts, day, purpose, model, input_tokens, output_tokens, "
-                         "cache_read_tokens, cost_usd) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                         (time.time(), _today(), purpose, model, inp + cw, out, cr, c))
+                         "cache_read_tokens, cost_usd, channel) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                         (time.time(), _today(), purpose, model, inp + cw, out, cr, c, current_channel()))
             conn.commit()
         finally:
             conn.close()

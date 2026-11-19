@@ -131,6 +131,12 @@ DEFAULTS: dict = {
         "cut": True,
         "min_seconds": 1.0,  # ignore shorter music markers
     },
+    "costs": {
+        # for /stats breakeven: what running this costs besides metered Claude calls
+        "server_usd_per_day": 3.5,  # cloud server estimate (check your AWS bill; may come from credits)
+        "ai_unmetered_usd": 0.0,  # Claude spend from before calls were metered
+        "started": "",  # YYYY-MM-DD the operation started (server cost accrues from here)
+    },
     "digest": {
         "enabled": True,  # one Telegram message each morning: posts, views, pools, spend, what's waiting
         "hour": 9,  # local hour ([posting].timezone) it's sent at

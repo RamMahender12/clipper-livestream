@@ -200,6 +200,9 @@ def refresh_stats(db: DB, cfg: dict) -> int:
             if stats := found.get(post["remote_id"]):
                 db.update("posts", post["id"], views=stats.views, likes=stats.likes,
                           comments=stats.comments, stats_at=time.time())
+                from . import stats as stats_mod
+
+                stats_mod.record_views(db, post["id"], stats.views)  # view history for the /stats charts
                 n += 1
     return n
 

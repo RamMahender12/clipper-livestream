@@ -241,6 +241,9 @@ def _gemini_line(notes: dict) -> str:
 def judge_clip(cfg: dict, clip: dict, notes: dict, ch: dict | None, camp: dict | None,
                history: list[PastClip], est: Estimate) -> tuple[dict | None, str]:
     acfg = cfg["auto_approve"]
+    from . import ai
+
+    ai.set_channel(clip.get("channel"))
     spike_terms = ""
     if clip.get("spike_terms"):
         spike_terms = clip["spike_terms"]

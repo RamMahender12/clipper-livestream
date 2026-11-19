@@ -51,6 +51,9 @@ def queue_clip(
 
 
 def process_clip(db: DB, cfg: dict, clip: dict) -> None:
+    from . import ai
+
+    ai.set_channel(clip["channel"])  # Claude spend in this clip's work counts for its streamer
     clip_id = clip["id"]
     ch = config_mod.channel(cfg, clip["channel"]) or {"login": clip["channel"]}
     camp = guardrails.campaign_for(cfg, ch)
@@ -411,8 +414,9 @@ def swap_hook(db: DB, cfg: dict, clip_id: int) -> bool:
 def gemini_review(db: DB, cfg: dict, clip_id: int) -> bool:
     """Have Gemini watch the rendered clip and merge its verdict with Claude's.
     Never fails the clip: without Gemini, Claude's verdict stands."""
-    from . import gemini
+    from . import ai, gemini
 
+    ai.set_channel((db.one("SELECT channel FROM clips WHERE id = ?", (clip_id,)) or {"channel": ""})["channel"])
     if not gemini.configured(cfg):
         return False
     row = dict(db.one("SELECT * FROM clips WHERE id = ?", (clip_id,)))
