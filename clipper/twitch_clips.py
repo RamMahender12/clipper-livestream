@@ -175,10 +175,11 @@ def harvest_once(db: DB, cfg: dict, helix: Helix | None = None, fetch=download) 
             lines.append(f"{login}: Twitch API error: {exc}")
             continue
         picked = 0
+        min_views = int(ch.get("twitch_min_views", tcfg.get("min_views", 10)))  # small streams: their own bar
         pool = [int(x.get("view_count", 0)) for x in clips]
         hours = float(tcfg.get("lookback_hours", 3))
         for c in clips:
-            if picked >= int(tcfg.get("per_poll", 3)) or c.get("view_count", 0) < int(tcfg.get("min_views", 10)):
+            if picked >= int(tcfg.get("per_poll", 3)) or c.get("view_count", 0) < min_views:
                 break
             prev = db.one("SELECT note, clip_id FROM twitch_clips_seen WHERE id = ?", (c["id"],))
             if prev and not prev["note"].startswith("overlaps clip"):

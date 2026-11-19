@@ -78,7 +78,7 @@ class ChannelWatcher(threading.Thread):
 
         chat = ChatReader(self.login, on_msg, chat_stop)
         chat.start()
-        det = SpikeDetector.from_config(self.cfg)
+        det = SpikeDetector.from_config(self.cfg, config_mod.channel(self.cfg, self.login))
         pending: list[PendingCut] = []
         recent_clips: deque[float] = deque()
         max_per_hour = int(ccfg["max_per_hour_per_channel"])

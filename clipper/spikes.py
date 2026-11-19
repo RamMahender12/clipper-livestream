@@ -68,8 +68,10 @@ class SpikeDetector:
         self._last_spike_at = float("-inf")
 
     @classmethod
-    def from_config(cls, cfg: dict) -> "SpikeDetector":
-        return cls(**cfg["detect"])
+    def from_config(cls, cfg: dict, channel_cfg: dict | None = None) -> "SpikeDetector":
+        """[detect] settings, with the streamer's own `detect = {...}` on top: a 200-viewer chat
+        never reaches thresholds sized for one with thousands."""
+        return cls(**{**cfg["detect"], **((channel_cfg or {}).get("detect") or {})})
 
     def _open(self, ts: float) -> None:
         start = ts - (ts % self.window)
