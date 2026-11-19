@@ -62,6 +62,14 @@ def process_clip(db: DB, cfg: dict, clip: dict) -> None:
         raise FileNotFoundError(f"source missing: {src}")
     start, dur = float(clip["start_s"] or 0), float(clip["duration_s"] or 30)
 
+    # 0. one frame, Haiku: is this GTA 6 at all? Giveaways, IRL and other games stop here, before
+    # transcription, packaging, the render and the full video check
+    if why := quick_game_check(db, cfg, clip, src, start, dur):
+        _finish(db, clip_id, status="rejected", decided_by="auto", decided_at=time.time(),
+                decision_note=f"Dropped: {why}"[:1500])
+        log.info("clip %s dropped by the quick game check", clip_id)
+        return
+
     # 1. transcript (cached across re-renders)
     if clip["words_json"]:
         words = [captions.Word(**w) for w in json.loads(clip["words_json"])]
@@ -92,8 +100,8 @@ def process_clip(db: DB, cfg: dict, clip: dict) -> None:
         if meta.source == "template" and meta.ai_error:
             # Claude was down or over its cap: redo_after_outage writes it properly once it's back
             notes.update(packaging_error=meta.ai_error, template_hook=meta.hook)
-        prev = _notes(clip)
-        notes.update({k: prev[k] for k in ("ai_redos", "ai_redo_at") if k in prev})
+        prev = _notes(db.one("SELECT ai_notes FROM clips WHERE id = ?", (clip_id,)) or clip)
+        notes.update({k: prev[k] for k in ("ai_redos", "ai_redo_at", "precheck") if k in prev})
         db.update(
             "clips", clip_id,
             hook=meta.hook, title=meta.title, caption=meta.caption,
@@ -123,11 +131,39 @@ def process_clip(db: DB, cfg: dict, clip: dict) -> None:
     check_and_finish(db, cfg, clip_id, own_hook=not clip["hook"])
 
 
-def _notes(row: dict) -> dict:
+def _notes(row) -> dict:
     try:
-        return json.loads(row.get("ai_notes") or "{}")
+        return json.loads(dict(row).get("ai_notes") or "{}")
     except json.JSONDecodeError:
         return {}
+
+
+def quick_game_check(db: DB, cfg: dict, clip: dict, src: Path, start: float, dur: float) -> str:
+    """Why the clip is dropped as not GTA 6 after Haiku looked at one frame from the middle of the
+    moment, or "" to carry on. Runs once, while the video check is on, on clips we package ourselves
+    (not a re-render with your hook, not one you decided on). Only "no game on screen" drops it.
+    "Another game" doesn't: GTA 6 is newer than Haiku, which took real GTA 6 footage for other games
+    (19 Nov, 245 clips Sonnet had judged: "no game" caught 109 of 122 non-GTA clips and wrongly
+    flagged 4 of 123 GTA 6 ones, all rated 2-4/10; "another game" was wrong 10 times in 13). GTA 6,
+    another game, unsure, or a check that couldn't run (Claude down or over its cap) all go on to the
+    full video check. [gemini].precheck = false turns it off."""
+    g = cfg.get("gemini", {})
+    notes = _notes(clip)
+    if (not g.get("enabled") or not g.get("precheck", True) or not g.get("reject_off_game", True) or clip.get("hook")
+            or clip.get("decided_by") == "human" or "precheck" in notes):
+        return ""
+    from . import claude_vision
+
+    try:
+        shows, what, model = claude_vision.precheck(cfg, src, start + dur / 2)
+    except Exception as exc:
+        log.info("clip %s: quick game check skipped: %s", clip["id"], exc)
+        return ""
+    notes["precheck"] = {"shows": shows, "what": what[:200], "model": model}
+    db.update("clips", clip["id"], ai_notes=json.dumps(notes))
+    if shows != "not_a_game":
+        return ""
+    return f"not GTA 6 gameplay (quick check, no game on screen){': ' + what[:200] if what else ''}"
 
 
 def _finish(db: DB, clip_id: int, **fields) -> bool:

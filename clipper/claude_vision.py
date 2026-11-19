@@ -80,3 +80,58 @@ def review(cfg: dict, video: Path, *, streamer: str, hook: str, transcript: str,
     if data is None:
         raise GeminiError(f"Claude video check failed: {model}")
     return normalize(data, model)
+
+
+# ---------------------------------------------------------------- quick game check
+# Before a clip is rendered and sent for the full video check (Sonnet, ~$0.013), Haiku looks at one
+# frame of the stream (~$0.0001) and says whether it's GTA 6 at all. Marathon streams spend hours on
+# giveaways, IRL and chatting: on 19 Nov a quarter of all clips weren't GTA 6.
+PRECHECK_SYSTEM = (
+    "You look at one frame from a live Twitch stream, taken from the middle of a moment that is about to "
+    "be clipped for a GTA 6 clip page. Say what the frame shows.\n"
+    "- gta6: GTA 6 on screen in any form: driving, walking, shooting, cutscenes, the map, the phone, menus, "
+    "loading screens, character screens, the pause menu. Usually full-screen with a small webcam of the "
+    "streamer in a corner.\n"
+    "- other_game: clearly a different video game.\n"
+    "- not_a_game: no game at all: a webcam or IRL camera filling the screen, people in a room, car or street, "
+    "a giveaway or chat dashboard, a desktop or browser, a 'starting soon' or 'be right back' screen.\n"
+    "- unsure: anything else, including a frame too dark or blurry to tell, or a game you can't place.\n"
+    "Only answer other_game or not_a_game when you are sure: a wrong answer drops a clip that could have "
+    "been posted.")
+PRECHECK_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "shows": {"type": "string", "enum": ["gta6", "other_game", "not_a_game", "unsure"]},
+        "what": {"type": "string", "description": "one short sentence: what's on screen"},
+    },
+    "required": ["shows", "what"],
+    "additionalProperties": False,
+}
+
+
+def stream_frame(source: Path, at: float, width: int = 512) -> bytes:
+    """One JPEG frame of the source recording at `at` seconds."""
+    with tempfile.TemporaryDirectory() as tmp:
+        jpg = Path(tmp) / "f.jpg"
+        tools.run([tools.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", "-ss", f"{max(0.0, at):.2f}",
+                   "-i", str(source), "-frames:v", "1", "-vf", f"scale={width}:-2", "-q:v", "5", str(jpg)],
+                  timeout=60)
+        if not jpg.exists():
+            raise GeminiError("couldn't read a frame from the recording")
+        return jpg.read_bytes()
+
+
+def precheck(cfg: dict, source: Path, at: float) -> tuple[str, str, str]:
+    """(shows, what, model) for one frame of the stream at `at` seconds. Raises GeminiError when it
+    can't run (no frame, Claude over its cap or down): the caller then carries on as before."""
+    g = cfg.get("gemini", {})
+    jpg = stream_frame(source, at, int(g.get("precheck_width", 512)))
+    content = [{"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
+                                            "data": base64.standard_b64encode(jpg).decode()}},
+               {"type": "text", "text": "What does this frame show?"}]
+    data, model = ai.call_json(cfg, PRECHECK_SYSTEM, content, PRECHECK_SCHEMA, effort="low",
+                               model=g.get("precheck_model", "claude-haiku-5-5"), max_tokens=300,
+                               purpose="precheck", thinking="off")
+    if data is None:
+        raise GeminiError(f"quick game check failed: {model}")
+    return data["shows"], (data.get("what") or "").strip(), model

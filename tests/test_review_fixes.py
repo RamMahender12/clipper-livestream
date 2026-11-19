@@ -194,6 +194,77 @@ class OffGameTests(unittest.TestCase):
         self.assertEqual(row(self.db, cid)["status"], "ready")
 
 
+class QuickGameCheckTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.cfg = make_cfg(self.tmp)
+        self.cfg["gemini"].update(enabled=True, backend="claude")
+        self.db = DB(Path(self.tmp) / "t.db")
+        src = Path(self.tmp) / "raw.ts"
+        src.write_bytes(b"x")
+        self.src = src
+
+    def clip(self, **kw):
+        fields = dict(status="rendering", hook="", source=str(self.src), start_s=10, duration_s=20,
+                      words_json="", ai_notes="")
+        fields.update(kw)
+        return add_clip(self.db, self.tmp, **fields)
+
+    def run_clip(self, cid, shows="not_a_game", what="Clix runs a giveaway draw on a dashboard"):
+        from clipper import claude_vision, metadata
+        meta = metadata.ClipMeta(hook="h", title="t", caption="c", quality=8, source="claude-haiku-5-5")
+        with mock.patch.object(claude_vision, "precheck", return_value=(shows, what, "claude-haiku-5-5")) as pre, \
+                mock.patch.object(pipeline.captions, "transcribe_full", return_value=([], [])) as whisper, \
+                mock.patch.object(metadata, "generate", return_value=meta), \
+                mock.patch.object(pipeline, "render_final") as render, \
+                mock.patch.object(pipeline, "check_and_finish") as check:
+            pipeline.process_clip(self.db, self.cfg, row(self.db, cid))
+        return pre, whisper, render, check
+
+    def test_no_game_on_screen_stops_before_any_work(self):
+        cid = self.clip()
+        pre, whisper, render, check = self.run_clip(cid)
+        self.assertAlmostEqual(pre.call_args[0][2], 20.0)  # the middle of the moment
+        r = row(self.db, cid)
+        self.assertEqual((r["status"], r["decided_by"]), ("rejected", "auto"))
+        self.assertIn("quick check, no game on screen", r["decision_note"])
+        self.assertIn("giveaway draw", r["decision_note"])
+        render.assert_not_called()
+        check.assert_not_called()
+        self.assertEqual(json.loads(r["ai_notes"])["precheck"]["shows"], "not_a_game")
+
+    def test_gta6_another_game_and_unsure_go_on_and_the_verdict_is_kept(self):
+        # "another game" too: Haiku took real GTA 6 footage for other games (it's newer than Haiku)
+        for shows in ("gta6", "other_game", "unsure"):
+            cid = self.clip()
+            _, _, render, check = self.run_clip(cid, shows=shows, what="driving")
+            render.assert_called_once()
+            check.assert_called_once()
+            self.assertEqual(json.loads(row(self.db, cid)["ai_notes"])["precheck"]["shows"], shows)
+
+    def test_a_failed_check_never_drops_the_clip(self):
+        from clipper import claude_vision
+        cid = self.clip()
+        with mock.patch.object(claude_vision, "precheck", side_effect=claude_vision.GeminiError("budget")):
+            self.assertEqual(pipeline.quick_game_check(self.db, self.cfg, row(self.db, cid), self.src, 0, 20), "")
+
+    def test_skipped_for_your_hook_your_decision_or_a_second_pass(self):
+        yours = self.clip(hook="my hook")
+        decided = self.clip(decided_by="human")
+        again = self.clip(ai_notes=json.dumps({"precheck": {"shows": "gta6"}}))
+        for cid in (yours, decided, again):
+            pre, *_ = self.run_clip(cid)
+            pre.assert_not_called()
+
+    def test_off_with_the_switch_or_without_the_video_check(self):
+        self.cfg["gemini"]["precheck"] = False
+        pre, *_ = self.run_clip(self.clip())
+        pre.assert_not_called()
+        self.cfg["gemini"].update(precheck=True, enabled=False)
+        pre, *_ = self.run_clip(self.clip())
+        pre.assert_not_called()
+
+
 class ClaimTests(unittest.TestCase):
     def test_two_connections_never_get_the_same_clip(self):
         tmp = tempfile.mkdtemp()
