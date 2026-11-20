@@ -13,6 +13,8 @@ import os
 import sqlite3
 import threading
 import time
+import urllib.error
+import urllib.request
 
 log = logging.getLogger(__name__)
 
@@ -71,8 +73,82 @@ def available(cfg: dict) -> tuple[bool, str]:
     return True, ""
 
 
+def use_openrouter() -> bool:
+    """OpenRouter (free models) is used when its key is set and there's no Anthropic key."""
+    return bool(os.environ.get("OPENROUTER_API_KEY")) and not (
+        os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"))
+
+
+def _openrouter_content(user):
+    """Anthropic content blocks -> OpenAI-style parts (images become data URIs)."""
+    if isinstance(user, str):
+        return user
+    parts = []
+    for b in user:
+        if b.get("type") == "image":
+            s = b["source"]
+            parts.append({"type": "image_url", "image_url": {"url": f"data:{s['media_type']};base64,{s['data']}"}})
+        else:
+            parts.append(b)
+    return parts
+
+
+def _extract_json(text: str):
+    text = text.strip()
+    if text.startswith("```"):
+        text = text.strip("`").removeprefix("json").strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        a, b = text.find("{"), text.rfind("}")
+        return json.loads(text[a:b + 1])  # raises JSONDecodeError if there's no object
+
+
+def _call_openrouter(cfg: dict, system: str, user, schema: dict, max_tokens: int, purpose: str):
+    ai = cfg["ai"]
+    models = [ai.get("openrouter_model", "google/gemma-4-31b-it:free"), "openrouter/free"]
+    sys_msg = system + "\n\nReply with ONLY a JSON object matching this JSON Schema, no other text:\n" + json.dumps(schema)
+    last = "connection"
+    for model in models:
+        payload = json.dumps({"model": model, "max_tokens": min(max_tokens, 4000),
+                              "response_format": {"type": "json_object"},
+                              "messages": [{"role": "system", "content": sys_msg},
+                                           {"role": "user", "content": _openrouter_content(user)}]}).encode()
+        req = urllib.request.Request(
+            "https://openrouter.ai/api/v1/chat/completions", data=payload,
+            headers={"Authorization": "Bearer " + os.environ["OPENROUTER_API_KEY"],
+                     "Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                body = json.loads(resp.read())
+        except urllib.error.HTTPError as exc:
+            if exc.code in (401, 403):
+                log.error("OpenRouter API key rejected")
+                return None, "auth"
+            log.warning("OpenRouter %s error %s", model, exc.code)
+            last = "rate-limit" if exc.code == 429 else f"api-{exc.code}"
+            continue
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError):
+            log.warning("OpenRouter unreachable")
+            continue
+        try:
+            data = _extract_json(body["choices"][0]["message"]["content"] or "")
+        except (KeyError, IndexError, json.JSONDecodeError):
+            log.warning("unparseable JSON from OpenRouter model %s", model)
+            last = "bad-json"
+            continue
+        u = body.get("usage") or {}
+        try:
+            record(cfg, purpose, model, type("U", (), {"input_tokens": u.get("prompt_tokens", 0),
+                                                       "output_tokens": u.get("completion_tokens", 0)})())
+        except Exception:
+            log.exception("couldn't record usage")
+        return data, body.get("model", model)
+    return None, last
+
+
 def have_credentials() -> bool:
-    return bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")
+    return bool(os.environ.get("OPENROUTER_API_KEY") or os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")
                 or os.path.exists(os.path.expanduser("~/.config/anthropic")))
 
 
@@ -183,6 +259,8 @@ def call_json(
             return None, "budget"
         if spent >= 0.8 * budget:
             _alert_once("budget80", f"Claude spend today is ${spent:.2f}, 80% of the ${budget:.2f} daily cap.")
+    if use_openrouter():
+        return _call_openrouter(cfg, system, user, schema, max_tokens, purpose)
     try:
         import anthropic
     except ImportError:

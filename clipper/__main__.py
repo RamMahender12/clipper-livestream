@@ -107,7 +107,7 @@ def cmd_doctor(args, cfg) -> int:
     model = config_mod.resolve(cfg, cfg["paths"]["whisper_model"])
     line(model.exists(), "whisper model", str(model))
     print("AI packaging")
-    have_key = bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"))
+    have_key = bool(os.environ.get("OPENROUTER_API_KEY") or os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"))
     print(f"  [{'ok' if have_key else '--'}] Anthropic credentials"
           f"{'' if have_key else ' - not set: hooks/titles fall back to templates (export ANTHROPIC_API_KEY=...)'}")
     from . import service

@@ -3,9 +3,9 @@ view counts fresh for the earnings scoreboard."""
 from __future__ import annotations
 
 import contextlib
-import fcntl
 import json
 import logging
+import sys
 import threading
 import time
 from pathlib import Path
@@ -36,14 +36,24 @@ def _posting_lock(cfg: dict):
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w") as fh:
         try:
-            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            if sys.platform == "win32":
+                import msvcrt
+
+                msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
             yield False
             return
         try:
             yield True
         finally:
-            fcntl.flock(fh, fcntl.LOCK_UN)
+            if sys.platform == "win32":
+                msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(fh, fcntl.LOCK_UN)
 
 
 def post_once(db: DB, cfg: dict) -> list[str]:
