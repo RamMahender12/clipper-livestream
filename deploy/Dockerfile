@@ -32,6 +32,7 @@ WORKDIR /app
 COPY --from=whisper /ggml-base.en.bin /app/models/ggml-base.en.bin
 COPY pyproject.toml config.example.toml ./
 COPY clipper ./clipper
+COPY assets/logos ./assets/logos
 
 ENV PYTHONUNBUFFERED=1 \
     CLIPPER_SERVICE=1

@@ -399,6 +399,10 @@ def render_final(db: DB, cfg: dict, clip_id: int, ch: dict, src: Path, start: fl
         ass_path = out_dir / "captions.ass"
         ass_path.write_text(ass, encoding="utf-8")
     final = out_dir / "final.mp4"
+    camp = guardrails.campaign_for(cfg, ch) or {}  # a campaign may require its logo on every clip
+    logo = config_mod.resolve(cfg, camp["logo"]) if camp.get("logo") else None
+    if logo and not logo.is_file():
+        raise FileNotFoundError(f"campaign {camp.get('id')} logo missing: {logo}")  # never post without it
     render.render(
         src, final, start, dur,
         layout=ch.get("layout") or ccfg["layout"],
@@ -406,6 +410,7 @@ def render_final(db: DB, cfg: dict, clip_id: int, ch: dict, src: Path, start: fl
         encoder=ccfg["encoder"], facecam=ch.get("facecam"), ass_path=ass_path,
         zoom=float(ch.get("zoom", ccfg.get("zoom", 1.0))),
         mute=captions.profane_spans(words) if capcfg.get("mute_profanity", True) else None,
+        logo=logo,
     )
     try:
         render.thumbnail(final, out_dir / "thumb.jpg", at=min(1.5, dur / 2))

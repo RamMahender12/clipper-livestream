@@ -54,7 +54,7 @@ a{color:var(--accent)}
 @media (max-width:420px){main{padding:10px;grid-template-columns:1fr}}
 </style></head><body>
 <header>
-  <h1>GTA 6 Clip Review</h1><a href="/stats" style="color:var(--accent);text-decoration:none;margin-right:8px">📊 Stats</a>
+  <h1>GTA 6 Clip Review</h1><a href="/stats" style="color:var(--accent);text-decoration:none;margin-right:8px">📊 Stats</a><a href="/live" style="color:var(--accent);text-decoration:none;margin-right:8px">📺 Live posts</a>
   <span class="stat" id="stats"></span>
   <nav id="tabs"></nav>
   <div id="watch"></div>
@@ -225,6 +225,19 @@ def make_handler(db: DB, cfg: dict, watchers: list):
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+            elif url.path == "/live":
+                from .live_page import LIVE_PAGE
+
+                body = LIVE_PAGE.encode()
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            elif url.path == "/api/live":
+                from . import live_page
+
+                self._json(live_page.build(db, cfg))
             elif url.path == "/api/stats":
                 from . import stats
 

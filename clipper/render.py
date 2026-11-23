@@ -21,7 +21,9 @@ def build_filtergraph(
     facecam: list[float] | None = None,
     ass_path: Path | None = None,
     zoom: float = 1.0,
+    logo: bool = False,
 ) -> str:
+    """`logo`: a second input (image) goes in the top-left corner, above the credit and hook."""
     w, h = width, height
     zw = max(w, int(w * zoom) // 2 * 2)
     if layout == "facecam_split" and facecam:
@@ -45,10 +47,16 @@ def build_filtergraph(
             f"[fg]scale={zw}:-2:flags=lanczos,crop={w}:ih[fgs];"  # zoom > 1 trims the sides
             f"[bgb][fgs]overlay=(W-w)/2:(H-h)/2[base]"
         )
+    base = "base"
+    if logo:  # campaign branding, e.g. ClipUp: small, top-left, clear of the centred credit and hook
+        lw = int(w * 0.16) // 2 * 2
+        graph += (f";[1:v]scale={lw}:-1,format=rgba,colorchannelmixer=aa=0.92[lg];"
+                  f"[base][lg]overlay={int(w * 0.035)}:{int(h * 0.02)}[branded]")
+        base = "branded"
     if ass_path:
-        graph += f";[base]ass=filename={_escape_filter_path(ass_path)}[v]"
+        graph += f";[{base}]ass=filename={_escape_filter_path(ass_path)}[v]"
     else:
-        graph += ";[base]null[v]"
+        graph += f";[{base}]null[v]"
     return graph
 
 
@@ -67,10 +75,11 @@ def render(
     ass_path: Path | None = None,
     zoom: float = 1.0,
     mute: list[tuple[float, float]] | None = None,
+    logo: Path | None = None,
 ) -> Path:
-    """`mute`: (start, end) spans, in clip time, to silence (swear words)."""
+    """`mute`: (start, end) spans, in clip time, to silence (swear words). `logo`: image to brand with."""
     out.parent.mkdir(parents=True, exist_ok=True)
-    graph = build_filtergraph(layout, width, height, fps, facecam, ass_path, zoom)
+    graph = build_filtergraph(layout, width, height, fps, facecam, ass_path, zoom, logo=bool(logo))
     if encoder == "h264_videotoolbox" and tools.has_encoder("h264_videotoolbox"):
         venc = ["-c:v", "h264_videotoolbox", "-b:v", "10M", "-maxrate", "14M", "-bufsize", "20M"]
     else:
@@ -78,6 +87,7 @@ def render(
     cmd = [
         tools.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y",
         "-ss", f"{max(0.0, start):.3f}", "-t", f"{duration:.3f}", "-i", str(src),
+        *(["-i", str(logo)] if logo else []),
         "-filter_complex", graph, "-map", "[v]", "-map", "0:a:0?",
         *venc, "-pix_fmt", "yuv420p",
         "-af", audio_filter(mute),
