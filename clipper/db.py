@@ -87,6 +87,7 @@ MIGRATIONS: dict[str, list[tuple[str, str]]] = {
         ("source_note", "TEXT DEFAULT ''"),  # e.g. "Twitch viewers clipped this ... (312 views)"
         ("source_views", "INTEGER DEFAULT 0"),  # views on the Twitch viewer clip we harvested
         ("source_pct", "REAL"),
+        ("drive_url", "TEXT DEFAULT ''"),  # Google Drive link of the rendered clip
         ("music_json", "TEXT DEFAULT ''"),  # [[start, end], ...] where whisper heard music, clip time  # share of the streamer's recent viewer clips it out-viewed (None: too few)
     ],
     "posts": [

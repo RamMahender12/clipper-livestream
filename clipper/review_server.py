@@ -93,6 +93,7 @@ async function load(){
           ${n.gemini&&n.gemini.is_gta6===false?'<span class="pill high">NOT GTA 6?</span>':""}
           ${(n.music_heavy||(n.gemini&&["possible","likely"].includes(n.gemini.music)))?`<span class="pill ${n.music_heavy||n.gemini.music==="likely"?"high":"low"}" title="${esc((n.gemini&&n.gemini.music_reason)||"")}">🎵 music: ${esc(n.music_heavy?"heavy":n.gemini.music)}</span>`:""}
           ${c.decided_by?`<span class="pill ${c.decided_by==="auto"?"auto":""}">${c.decided_by==="auto"?"AI":"you"}: ${esc(c.status)}</span>`:""}
+          ${c.drive_url?`<a class="pill" href="${esc(c.drive_url)}" target="_blank" rel="noopener">☁️ Drive</a>`:""}
           ${c.expected_views?`<span class="pill">~${Number(c.expected_views).toLocaleString()} views expected</span>`:""}</div>
         ${c.decision_note?`<div class="decision">${esc(c.decision_note)}</div>`:""}
         ${c.source_note?`<div class="note">🎬 ${esc(c.source_note)}</div>`:""}

@@ -5,12 +5,15 @@ campaign dashboard). No network, no credentials, always ready.
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import re
 import shutil
 from pathlib import Path
 
 from .. import config as config_mod
 from .base import Publisher, PostMeta, PostResult, caption_with_tags
+
+log = logging.getLogger(__name__)
 
 
 def slugify(text: str, max_len: int = 50) -> str:

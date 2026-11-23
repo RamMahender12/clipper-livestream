@@ -162,6 +162,8 @@ def caption_for(cfg: dict, clip: dict, kind: str) -> str:
     if clip.get("source_note"):
         lines.append(clip["source_note"][:200])
     lines.append(f"Hook: {clip.get('hook', '').strip()}")
+    if clip.get("drive_url"):
+        lines.append(f"☁️ Drive: {clip['drive_url']}")
     if notes.get("violence_cut"):
         k = notes["violence_cut"].get("kept", [0, 0])
         what = ", ".join(sorted({str(v[2]) for v in notes["violence_cut"].get("removed", [])}))[:80]

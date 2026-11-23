@@ -273,8 +273,8 @@ def _store_token(path: Path, tok: dict, previous: dict | None = None) -> dict:
     return merged
 
 
-def _access_token(cfg: dict, force: bool = False) -> str:
-    secrets_path, token_path = _paths(cfg)
+def _access_token(cfg: dict, force: bool = False, paths: tuple[Path, Path] | None = None) -> str:
+    secrets_path, token_path = paths or _paths(cfg)
     tok = _read_json(token_path)
     if not tok.get("refresh_token"):
         raise _ApiError("YouTube not authorized: run youtube.authorize(cfg)")
@@ -325,10 +325,11 @@ def _wait_for_redirect(server: HTTPServer, timeout: float) -> dict | None:
     return server.oauth_params  # type: ignore[attr-defined]
 
 
-def authorize(cfg: dict, timeout: float = 300.0) -> None:
+def authorize(cfg: dict, timeout: float = 300.0, scopes: list[str] | None = None,
+              paths: tuple[Path, Path] | None = None) -> None:
     """One-time interactive consent: opens the browser, catches the loopback
     redirect on http://127.0.0.1:<random port>, stores the refresh token."""
-    secrets_path, token_path = _paths(cfg)
+    secrets_path, token_path = paths or _paths(cfg)
     client = _load_client(secrets_path)
     verifier, challenge = pkce_pair()
     state = secrets.token_urlsafe(24)
@@ -339,7 +340,7 @@ def authorize(cfg: dict, timeout: float = 300.0) -> None:
             "client_id": client["client_id"],
             "redirect_uri": redirect_uri,
             "response_type": "code",
-            "scope": " ".join(SCOPES),
+            "scope": " ".join(scopes or SCOPES),
             "code_challenge": challenge,
             "code_challenge_method": "S256",
             "state": state,
@@ -367,7 +368,7 @@ def authorize(cfg: dict, timeout: float = 300.0) -> None:
         raise RuntimeError("Google returned no refresh token. Remove the app at "
                            "https://myaccount.google.com/permissions and run authorize again.")
     _store_token(token_path, tok)
-    print(f"YouTube authorized. Token saved to {token_path}")
+    print(f"Authorized. Token saved to {token_path}")
 
 
 # ---------------------------------------------------------------- publisher

@@ -171,6 +171,25 @@ def _finish(db: DB, clip_id: int, **fields) -> bool:
     return db.update_if("clips", clip_id, {"status": "rendering"}, **fields)
 
 
+def _to_drive(db: DB, cfg: dict, clip_id: int) -> None:
+    """Put the finished clip in Google Drive and keep its link on the clip. Never fails the clip."""
+    from pathlib import Path
+
+    from .publishers import drive, export
+
+    try:
+        if not drive.enabled(cfg):
+            return
+        row = dict(db.one("SELECT final_path FROM clips WHERE id = ?", (clip_id,)))
+        video = Path(row.get("final_path") or "")
+        if video.is_file():
+            link = drive.upload(cfg, video, export._today(cfg), name=f"{clip_id}_{video.name}")
+            db.execute("UPDATE clips SET drive_url = ? WHERE id = ?", (link, clip_id))  # not db.update: keep updated_at
+            log.info("clip %s in Drive: %s", clip_id, link)
+    except Exception as exc:
+        log.warning("clip %s: Drive upload failed: %s", clip_id, str(exc)[:200])
+
+
 def check_and_finish(db: DB, cfg: dict, clip_id: int, own_hook: bool) -> None:
     """The steps after a render: video check, cut violence and music, sharper hook, then ready."""
     gemini_review(db, cfg, clip_id)  # second opinion on the finished video
@@ -190,6 +209,7 @@ def check_and_finish(db: DB, cfg: dict, clip_id: int, own_hook: bool) -> None:
         swap_hook(db, cfg, clip_id)
     if _finish(db, clip_id, status="ready"):
         log.info("clip %s ready", clip_id)
+        _to_drive(db, cfg, clip_id)
     else:
         log.info("clip %s: you decided on it while it rendered; leaving your decision", clip_id)
 
