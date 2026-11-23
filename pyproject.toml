@@ -3,7 +3,7 @@ name = "gta6-clipper"
 version = "0.1.0"
 description = "Live Twitch clipper + review queue + official-API publisher for permissioned GTA 6 clipping"
 requires-python = ">=3.11"
-dependencies = ["anthropic>=2.0", "google-auth>=2.30,<3"]
+dependencies = ["anthropic>=2.0", "google-auth>=2.30,<3", "tzdata; sys_platform == 'win32'"]
 
 [project.optional-dependencies]
 assets = ["pillow"]  # assets/make_profile_pics.py
