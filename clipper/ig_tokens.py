@@ -97,6 +97,12 @@ def make_page_tokens(cfg: dict) -> list[str]:
     wanted = ig_accounts(cfg)
     pages = _get(cfg, "me/accounts", fields="name,access_token,instagram_business_account",
                  limit="100", access_token=tok).get("data", [])
+    # me/accounts skips Pages held in a Business portfolio; the token still names the Pages it was granted
+    seen = {str(p.get("id")) for p in pages}
+    granted = {i for s in debug(cfg, tok).get("granular_scopes", []) if s.get("scope", "").startswith("pages_")
+               for i in s.get("target_ids", [])}
+    pages += [_get(cfg, pid, fields="name,access_token,instagram_business_account", access_token=tok)
+              for pid in sorted(granted - seen)]
     data = load(cfg)
     lines = []
     for p in pages:

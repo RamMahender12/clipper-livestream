@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import urllib.parse
 from pathlib import Path
 
@@ -64,6 +65,36 @@ def upload(cfg: dict, video: Path, day: str, name: str | None = None) -> str:
                     {"Content-Type": "application/json; charset=UTF-8", "X-Upload-Content-Type": "video/mp4"})
     _, done = _call(cfg, "PUT", hdrs["Location"], video.read_bytes(), {"Content-Type": "video/mp4"})
     return done["webViewLink"]
+
+
+def delete(cfg: dict, link: str) -> None:
+    """Permanently delete the file behind a Drive link (skips the trash, so the space frees at once)."""
+    m = re.search(r"/d/([\w-]+)", link) or re.search(r"[?&]id=([\w-]+)", link)
+    if not m:
+        return
+    h = {"Authorization": "Bearer " + yt._access_token(cfg, paths=_paths(cfg))}
+    status, _, body = yt._request("DELETE", f"{API}/drive/v3/files/{m.group(1)}", headers=h)
+    if status >= 300 and status != 404:  # 404: already gone
+        raise RuntimeError(f"Drive HTTP {status}: {body[:200]!r}")
+
+
+def prune_posted(db, cfg: dict) -> int:
+    """Delete the Drive copy of every clip that is up on all its platforms, or was rejected (by you, the AI,
+    or expiry). Failed posts keep theirs for posting by hand. A failure retries next pass."""
+    if not enabled(cfg) or not cfg.get("drive", {}).get("delete_after_post", True):
+        return 0
+    n = 0
+    for row in db.query("SELECT id, status, drive_url FROM clips "
+                        "WHERE status IN ('posted', 'rejected') AND drive_url != ''"):
+        try:
+            delete(cfg, row["drive_url"])
+        except Exception as exc:
+            log.warning("clip %s: Drive delete failed: %s", row["id"], str(exc)[:200])
+            continue
+        db.execute("UPDATE clips SET drive_url = '' WHERE id = ?", (row["id"],))  # not db.update: keep updated_at
+        log.info("clip %s %s: removed from Drive", row["id"], row["status"])
+        n += 1
+    return n
 
 
 if __name__ == "__main__":

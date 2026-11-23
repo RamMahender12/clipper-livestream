@@ -104,9 +104,17 @@ def _extract_json(text: str):
         return json.loads(text[a:b + 1])  # raises JSONDecodeError if there's no object
 
 
+# ponytail: free model ids churn; override with [ai].openrouter_fallbacks when one disappears
+OPENROUTER_FALLBACKS = ["nvidia/nemotron-3.5-super-vl:free", "particle-ai/particle-1:free",
+                        "google/gemma-4-26b-a4b-it:free", "inclusionai/ling-3.2-flash:free"]
+
+
 def _call_openrouter(cfg: dict, system: str, user, schema: dict, max_tokens: int, purpose: str):
     ai = cfg["ai"]
-    models = [ai.get("openrouter_model", "google/gemma-4-31b-it:free"), "openrouter/free"]
+    # free models are often rate-limited upstream (429), so try a few that take images and return JSON;
+    # openrouter/free (random model, often bad JSON) only as a last resort
+    models = list(dict.fromkeys([ai.get("openrouter_model", "google/gemma-4-31b-it:free"),
+                                 *ai.get("openrouter_fallbacks", OPENROUTER_FALLBACKS), "openrouter/free"]))
     sys_msg = system + "\n\nReply with ONLY a JSON object matching this JSON Schema, no other text:\n" + json.dumps(schema)
     last = "connection"
     for model in models:
@@ -134,7 +142,8 @@ def _call_openrouter(cfg: dict, system: str, user, schema: dict, max_tokens: int
         try:
             data = _extract_json(body["choices"][0]["message"]["content"] or "")
         except (KeyError, IndexError, json.JSONDecodeError):
-            log.warning("unparseable JSON from OpenRouter model %s", model)
+            msg = ((body.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+            log.warning("unparseable JSON from OpenRouter model %s: %r", body.get("model", model), msg[:120])
             last = "bad-json"
             continue
         u = body.get("usage") or {}

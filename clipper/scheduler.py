@@ -187,6 +187,12 @@ def _mark_fully_posted(db: DB, cfg: dict) -> None:
             "SELECT platform FROM posts WHERE clip_id = ? AND status != 'error'", (clip["id"],))}
         if targets and set(targets) <= done:
             db.update("clips", clip["id"], status="posted")
+    from .publishers import drive
+
+    try:
+        drive.prune_posted(db, cfg)  # the Drive copy was only for review; free the space
+    except Exception:
+        log.exception("Drive cleanup failed")
 
 
 def _take(clip: dict) -> str:

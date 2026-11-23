@@ -345,7 +345,7 @@ def authorize(cfg: dict, timeout: float = 300.0, scopes: list[str] | None = None
             "code_challenge_method": "S256",
             "state": state,
             "access_type": "offline",
-            "prompt": "consent",  # always return a refresh token, even on re-auth
+            "prompt": "select_account consent",  # chooser shows Brand Account channels; consent: refresh token
         })
         print("Opening your browser for Google consent. If it does not open, visit:\n" + url)
         webbrowser.open(url)
