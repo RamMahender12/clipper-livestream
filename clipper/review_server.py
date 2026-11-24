@@ -102,7 +102,7 @@ async function load(){
           ${c.decided_by?`<span class="pill ${c.decided_by==="auto"?"auto":""}">${c.decided_by==="auto"?"AI":"you"}: ${esc(c.status)}</span>`:""}
           ${c.drive_url?`<a class="pill" href="${esc(c.drive_url)}" target="_blank" rel="noopener">☁️ Drive</a>`:""}
           ${c.expected_views?`<span class="pill">~${Number(c.expected_views).toLocaleString()} views expected</span>`:""}</div>
-        ${c.waiting&&c.waiting.length?`<div class="decision">⏳ ${c.waiting.map(esc).join(" · ")}</div>`:""}
+        ${c.waiting&&c.waiting.length?`<div class="decision"><b>⏳ Next upload</b>${c.waiting.map(w=>"<br>"+esc(w)).join("")}</div>`:""}
         ${c.decision_note?`<div class="decision">${esc(c.decision_note)}</div>`:""}
         ${c.source_note?`<div class="note">🎬 ${esc(c.source_note)}</div>`:""}
         ${n.tiebreak?`<div class="note">⚖️ ${esc(n.tiebreak)}</div>`:""}

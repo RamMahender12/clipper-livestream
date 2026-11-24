@@ -120,9 +120,14 @@ class AutoPostTests(unittest.TestCase):
     def test_waiting_reasons_give_each_clip_a_start_time(self):
         a, b = self.clip("lacy", 1), self.clip("lacy", 2)
         w = scheduler.waiting_reasons(self.db, self.cfg)
-        self.assertEqual(w[a], ["youtube: starts in next pass (~1 min)"])
-        self.assertTrue(w[b][0].startswith("youtube: starts in ~1h 01m ("), w)  # 60-min gap
-        self.assertTrue(w[b][0].endswith(", 1 ahead in line"), w)
+        self.assertEqual(w[a], ["YouTube: uploads within a minute"])
+        self.assertTrue(w[b][0].startswith("YouTube: uploads at "), w)
+        self.assertTrue(w[b][0].endswith("(in 1h 01m) · 60-min gap between posts · 1 clip ahead in line"), w)
+        acct = publishers.channel_account(self.cfg, self.cfg["channels"][0], "youtube")
+        for i in range(5):  # cap is 5: full
+            self.db.insert("posts", clip_id=900 + i, platform="youtube", account=acct, status="published",
+                           posted_at=time.time() - 7200 - i)
+        self.assertIn("daily limit reached (5 uploads per 24h)", scheduler.waiting_reasons(self.db, self.cfg)[a][0])
 
     def test_slots_respect_gap_and_daily_cap(self):
         now = 1_000_000.0
@@ -132,7 +137,7 @@ class AutoPostTests(unittest.TestCase):
                            posted_at=now - 3600 * (5 - i))
         s = scheduler._slots(self.db, self.cfg, "youtube", acct, now)
         # full until the oldest (5h ago) ages out at now + 19h, then the next one an hour later
-        self.assertEqual([next(s) - now for _ in range(2)], [19 * 3600, 20 * 3600])
+        self.assertEqual([next(s)[0] - now for _ in range(2)], [19 * 3600, 20 * 3600])
 
     def test_batch_message(self):
         now = datetime(2026, 11, 19, 7, 0, tzinfo=ZoneInfo("Asia/Kolkata"))

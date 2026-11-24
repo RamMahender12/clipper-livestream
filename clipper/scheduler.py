@@ -74,26 +74,30 @@ def _approved(db: DB) -> list[dict]:
         "expected_views DESC, quality DESC, score DESC, id ASC")]
 
 
-def _slots(db: DB, cfg: dict, platform: str, account: str, now: float) -> Iterator[float]:
-    """Times this account can post next, in order: min gap after the last post and no more than
-    the daily cap in any 24h, the same rules as guardrails.pacing_ok.
+def _slots(db: DB, cfg: dict, platform: str, account: str, now: float) -> Iterator[tuple[float, str]]:
+    """(time, why it's then) for each upcoming post of this account, in order: min gap after the
+    last post and no more than the daily cap in any 24h, the same rules as guardrails.pacing_ok.
     ponytail: ignores quiet_hours (empty in config) and upload failures; add if those get used."""
     posting = cfg["posting"]
     cap = int(posting.get("max_posts_per_day", {}).get(platform, 10))
+    gap_min = float(posting.get("min_gap_minutes", 45))
     # export has no gap but still posts one clip per pass, and a pass runs every 60 s
-    gap = 60.0 if platform == "export" else float(posting.get("min_gap_minutes", 45)) * 60
+    gap = 60.0 if platform == "export" else gap_min * 60
     times = [r["posted_at"] for r in db.query(
         "SELECT posted_at FROM posts WHERE platform = ? AND account = ? AND status != 'error' "
         "AND posted_at > ? ORDER BY posted_at", (platform, account, now - 86400))]
     t = now
     while True:
-        if times:
-            t = max(t, times[-1] + gap)
+        why = ""
+        if times and times[-1] + gap > t:
+            t = times[-1] + gap
+            why = "" if platform == "export" else f"{gap_min:g}-min gap between posts"
         window = [x for x in times if x > t - 86400]
         if len(window) >= cap:
             t = window[len(window) - cap] + 86400  # when enough of the last day's posts age out
+            why = f"daily limit reached ({cap} uploads per 24h)"
         times.append(t)
-        yield t
+        yield t, why
 
 
 def _dur(sec: float) -> str:
@@ -118,42 +122,55 @@ def waiting_reasons(db: DB, cfg: dict) -> dict[int, list[str]]:
 
     now = time.time()
     veto = float(cfg.get("auto_approve", {}).get("veto_minutes", 0)) * 60
-    slots: dict[tuple[str, str], Iterator[float]] = {}  # (platform, account) -> its upcoming post times
-    ahead: dict[tuple[str, str], int] = {}              # clips earlier in line for that account
+    slots: dict[tuple[str, str], Iterator[tuple[float, str]]] = {}  # (platform, account) -> upcoming posts
+    ahead: dict[tuple[str, str], int] = {}                          # clips earlier in line for that account
     out: dict[int, list[str]] = {}
     for clip in _approved(db):
         lines = out.setdefault(clip["id"], [])
         ch = config_mod.channel(cfg, clip["channel"])
         left = veto - (now - (clip.get("decided_at") or 0)) if clip.get("decided_by") == "auto" else 0
         for platform in cfg["posting"]["platforms"]:
-            prev = db.one("SELECT status, retry_at FROM posts WHERE clip_id = ? AND platform = ?",
+            name = PLATFORM_NAMES.get(platform, platform)
+            prev = db.one("SELECT status, retry_at, error FROM posts WHERE clip_id = ? AND platform = ?",
                           (clip["id"], platform))
             if prev and prev["status"] != "error":
                 continue  # already there
-            if prev and not (prev["retry_at"] and prev["retry_at"] <= now):
-                if prev["retry_at"]:
-                    lines.append(f"{platform}: retry in {int((prev['retry_at'] - now) / 60) + 1} min")
+            if prev and not prev["retry_at"]:
                 continue  # gave up: the error shows in the Posts row
             account = channel_account(cfg, ch, platform)
             allowed, why = guardrails.can_post(cfg, ch, clip, platform)
             if not account or not allowed:
                 if account:
-                    lines.append(f"{platform}: never ({why})")
+                    lines.append(f"{name}: won't upload ({why})")
                 continue
             if paused := takedowns.paused(db, account):
-                lines.append(f"{platform}: paused after a takedown ({paused[:60]})")
+                lines.append(f"{name}: on hold, account paused after a takedown ({paused[:60]})")
                 continue
             key = (platform, account)
             if key not in slots:
                 slots[key] = _slots(db, cfg, platform, account, now)
             n = ahead.get(key, 0)
             ahead[key] = n + 1
+            at, reason = next(slots[key])
+            reasons = [reason] if reason else []
             # ponytail: an auto clip still in its undo window really yields its slot to the next clip;
             # pushing it back is off by at most veto_minutes for that one clip
-            at = max(next(slots[key]), now + left)
-            when = "next pass (~1 min)" if at - now < 90 else f"~{_dur(at - now)} ({_clock(cfg, at)})"
-            lines.append(f"{platform}: starts in {when}" + (f", {n} ahead in line" if n else ""))
+            if now + left > at:
+                at, reasons = now + left, [f"{veto / 60:g}-min undo window after AI approval"]
+            if prev and prev["retry_at"] > at:  # a refused upload waits for its retry time
+                at, reasons = prev["retry_at"], []
+            if prev:
+                reasons.append(f"retrying, last try failed: {(prev['error'] or '')[:80]}")
+            if n:
+                reasons.append(f"{n} clip{'s' * (n > 1)} ahead in line")
+            when = ("within a minute" if at - now < 90
+                    else f"at {_clock(cfg, at)} (in {_dur(at - now)})")
+            lines.append(f"{name}: uploads {when}" + (" · " + " · ".join(reasons) if reasons else ""))
     return out
+
+
+PLATFORM_NAMES = {"youtube": "YouTube", "instagram": "Instagram", "tiktok": "TikTok",
+                  "export": "Local copy"}
 
 
 def _retry_note(cfg: dict, retry_at: float | None, safe: bool, attempts: int) -> str:

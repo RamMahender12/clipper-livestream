@@ -10,3 +10,4 @@ config.toml
 build/
 deploy/.env
 assets/profile/*_circle_preview.png
+.claude/settings.local.json
