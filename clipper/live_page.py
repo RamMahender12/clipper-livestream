@@ -44,9 +44,10 @@ main{padding:16px;max-width:1100px;margin:0 auto;display:grid;gap:20px}
 nav{display:flex;gap:8px;flex-wrap:wrap}nav a{font-size:12px;padding:4px 10px;border:1px solid var(--line);border-radius:999px;color:var(--text);text-decoration:none}
 section{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px}
 h2{font-size:18px;margin:0 0 12px;display:flex;gap:10px;align-items:baseline}h2 small{font-size:12px;color:var(--mute);font-weight:400}
-.clip{display:grid;grid-template-columns:64px minmax(0,1fr);gap:12px;padding:10px 0;border-top:1px solid var(--line)}
+.clip{display:grid;grid-template-columns:220px minmax(0,1fr);gap:14px;padding:12px 0;border-top:1px solid var(--line)}
 .clip:first-of-type{border-top:0}
-.clip img{width:64px;height:114px;object-fit:cover;border-radius:6px;background:#23262e}
+.clip img,.clip iframe{width:100%;aspect-ratio:9/16;object-fit:cover;border-radius:8px;background:#23262e;border:0;display:block}
+@media(max-width:560px){.clip{grid-template-columns:minmax(0,1fr)}.clip iframe,.clip img{max-width:320px}}
 .hook{font-weight:600;margin-bottom:4px;overflow-wrap:anywhere}.meta{color:var(--mute);font-size:12px;margin-bottom:8px}
 .links{display:flex;gap:8px;flex-wrap:wrap}
 .links a{display:inline-flex;gap:6px;align-items:center;padding:5px 10px;border-radius:8px;text-decoration:none;font-size:13px;color:#fff}
@@ -59,6 +60,13 @@ h2{font-size:18px;margin:0 0 12px;display:flex;gap:10px;align-items:baseline}h2 
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const when=t=>t?new Date(t*1000).toLocaleString([], {dateStyle:"medium",timeStyle:"short"}):"";
 const id=s=>"ch-"+s.replace(/[^a-z0-9_]/gi,"");
+// plays from YouTube/Instagram: our own copies are deleted once a clip is up
+function embed(u){u=String(u||"");let m=u.match(/youtube\.com\/(?:shorts\/|watch\?v=|embed\/)([\w-]{6,})|youtu\.be\/([\w-]{6,})/);
+  if(m)return `https://www.youtube.com/embed/${m[1]||m[2]}`;
+  m=u.match(/instagram\.com\/(?:[\w.]+\/)?(reel|reels|p|tv)\/([\w-]+)/);return m?`https://www.instagram.com/${m[1]==="reels"?"reel":m[1]}/${m[2]}/embed`:""}
+function player(k){const src=k.posts.filter(p=>p.status==="published").map(p=>embed(p.url)).filter(Boolean).sort((a,b)=>b.includes("youtube")-a.includes("youtube"))[0];
+  return src?`<iframe src="${esc(src)}" loading="lazy" allow="encrypted-media; picture-in-picture; fullscreen" allowfullscreen></iframe>`
+    :k.thumb?`<img src="/thumb/${k.id}.jpg" alt="" loading="lazy">`:"<span></span>"}
 async function load(){
   const data=await fetch("/api/live").then(r=>r.json());
   const m=document.getElementById("main");
@@ -68,7 +76,7 @@ async function load(){
   m.innerHTML=`<nav>${data.map(c=>`<a href="#${id(c.channel)}">${esc(c.name)} · ${c.clips.length}</a>`).join("")}</nav>`+
   data.map(c=>`<section id="${id(c.channel)}"><h2>${esc(c.name)} <small>${c.clips.length} clip${c.clips.length==1?"":"s"} live</small></h2>`+
     c.clips.map(k=>`<div class="clip">
-      ${k.thumb?`<img src="/thumb/${k.id}.jpg" alt="" loading="lazy">`:"<span></span>"}
+      ${player(k)}
       <div><div class="hook">${esc(k.hook)}</div>
       <div class="meta">Clip #${k.id} · posted ${esc(when(k.posted_at))}${k.campaign?` · ${esc(k.campaign)}`:""}</div>
       <div class="links">${k.posts.map(p=>{const down=!["published","ok"].includes(p.status);

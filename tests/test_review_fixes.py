@@ -475,6 +475,25 @@ class RetentionTests(unittest.TestCase):
         self.assertFalse(raw.exists())
         self.assertIn("Disk almost full", sent[0])
 
+    def test_posted_clip_loses_every_copy_once_it_is_on_youtube(self):
+        now = time.time()
+        raw, out = self.clip("posted", "up", updated=now)  # just posted: no waiting period
+        exp = self.tmp / "export" / "2026-11-24" / "1_up.mp4"
+        exp.parent.mkdir(parents=True)
+        exp.write_bytes(b"e")
+        exp.with_suffix(".txt").write_text("caption")
+        self.db.insert("posts", clip_id=1, platform="youtube", status="published",
+                       url="https://youtube.com/shorts/abc123", posted_at=now)
+        self.db.insert("posts", clip_id=1, platform="export", status="exported", remote_id=str(exp),
+                       url=exp.as_uri(), posted_at=now)
+        local_raw, local_out = self.clip("posted", "export-only", updated=now)  # nowhere else to watch it
+        self.db.insert("posts", clip_id=2, platform="export", status="exported", url="file:///x", posted_at=now)
+        retention.prune_media(self.db, self.cfg, low_disk=False)
+        self.assertFalse(raw.exists() or (out / "final.mp4").exists())
+        self.assertFalse(exp.exists() or exp.with_suffix(".txt").exists())
+        self.assertTrue((out / "thumb.jpg").exists())
+        self.assertTrue(local_raw.exists() and (local_out / "final.mp4").exists())
+
     def test_housekeeping_expires_unreviewed_clips_with_auto_approve_off(self):
         self.cfg["auto_approve"]["enabled"] = False
         self.clip("ready", "old")  # created 30 days ago

@@ -33,7 +33,7 @@ nav button.on{color:#111;background:var(--accent);border-color:var(--accent)}
 #watch{width:100%;color:var(--mute);font-size:12px}
 main{padding:16px;display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:16px}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden;display:flex;flex-direction:column}
-video{width:100%;aspect-ratio:9/16;max-height:560px;background:#000;display:block}
+video,.embed{width:100%;aspect-ratio:9/16;max-height:560px;background:#000;display:block;border:0}
 .body{padding:12px;display:flex;flex-direction:column;gap:8px}
 .row{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
 .pill{font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--mute)}
@@ -65,6 +65,13 @@ const TABS=["ready","approved","posted","queued","rendering","rejected","failed"
 let tab="ready";
 const vlabel=g=>String((g&&g.model)||"gemini").startsWith("gemini")?"Gemini":"Video check";
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+// a posted clip plays from YouTube/Instagram: our copies are deleted once it is up
+function embed(u){u=String(u||"");let m=u.match(/youtube\.com\/(?:shorts\/|watch\?v=|embed\/)([\w-]{6,})|youtu\.be\/([\w-]{6,})/);
+  if(m)return `https://www.youtube.com/embed/${m[1]||m[2]}`;
+  m=u.match(/instagram\.com\/(?:[\w.]+\/)?(reel|reels|p|tv)\/([\w-]+)/);return m?`https://www.instagram.com/${m[1]==="reels"?"reel":m[1]}/${m[2]}/embed`:""}
+function player(c){const p=(c.posts||[]).filter(p=>p.status==="published").map(p=>embed(p.url)).filter(Boolean).sort((a,b)=>b.includes("youtube")-a.includes("youtube"))[0];
+  if(c.status==="posted"&&p)return `<iframe class="embed" src="${esc(p)}" loading="lazy" allow="encrypted-media; picture-in-picture; fullscreen" allowfullscreen></iframe>`;
+  return c.final_path?`<video src="/media/${c.id}.mp4" controls preload="none" poster="/thumb/${c.id}.jpg"></video>`:""}
 function tabs(counts){document.getElementById("tabs").innerHTML=TABS.map(t=>`<button class="${t===tab?"on":""}" onclick="setTab('${t}')">${t} ${counts[t]||0}</button>`).join("")}
 function setTab(t){tab=t;load()}
 async function load(){
@@ -82,7 +89,7 @@ async function load(){
       <input id="pv${p.id}" type="number" min="0" placeholder="views" value="${p.views||""}" style="max-width:90px">
       <button onclick="savePost(${p.id})">Save</button></div>`).join("");
     return `<div class="card" id="c${c.id}">
-      ${c.final_path?`<video src="/media/${c.id}.mp4" controls preload="none" poster="/thumb/${c.id}.jpg"></video>`:""}
+      ${player(c)}
       <div class="body">
         <div class="row"><b>#${c.id}</b><span class="pill">${esc(c.channel)}</span>
           <span class="pill">${esc(c.campaign_id||"no campaign")}</span>

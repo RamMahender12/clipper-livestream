@@ -6,6 +6,8 @@ Stream segments are pruned by recorder.Pruner. This handles what's cut from them
   [retention].raw_hours (default 24). Nothing re-renders those clips any more.
 - rendered videos (data/clips/<id>/*.mp4) of rejected and failed clips after rejected_days
   (default 3), and of posted clips after posted_days (default 14). Thumbnails stay for the dashboard.
+- everything above, plus the data/export copy, as soon as a posted clip is up on YouTube or
+  Instagram: the dashboard embeds it from there (Drive's copy goes too, see drive.prune_posted).
 
 Queued, rendering, ready and approved clips are never touched, nor is a raw cut another live clip
 still uses. Under [retention].min_free_gb (default 5) free, everything allowed is deleted right away
@@ -67,22 +69,35 @@ def prune_media(db: DB, cfg: dict, now: float | None = None, low_disk: bool | No
 
     marks = ",".join("?" for _ in LIVE)
     live = {r["source"] for r in db.query(f"SELECT source FROM clips WHERE status IN ({marks})", LIVE)}
+    # up on YouTube/Instagram: the dashboard embeds it from there, so no copy of ours is needed
+    online = {r["clip_id"] for r in db.query(
+        "SELECT DISTINCT clip_id FROM posts WHERE platform IN ('youtube', 'instagram') "
+        "AND status = 'published' AND url != ''")}
     done = ",".join("?" for _ in DONE)
     for c in db.query(f"SELECT id, status, source, final_path, updated_at FROM clips WHERE status IN ({done})", DONE):
         age = now - float(c["updated_at"] or 0)
+        gone = c["status"] == "posted" and c["id"] in online
         src = Path(c["source"] or "")
-        if (c["source"] and c["source"] not in live and age >= raw_age
+        if (c["source"] and c["source"] not in live and (gone or age >= raw_age)
                 and _inside(src, data / "raw") and src.is_file()):
             remove(src)
             out["raw"] += 1
         keep_days = s["posted_days"] if c["status"] == "posted" else s["rejected_days"]
-        if c["final_path"] and (low_disk or age >= keep_days * day):
+        if c["final_path"] and (low_disk or gone or age >= keep_days * day):
             folder = Path(c["final_path"]).parent
             if _inside(folder, data / "clips"):
                 videos = list(folder.glob("*.mp4"))
                 for v in videos:
                     remove(v)
                 out["renders"] += bool(videos)
+        if gone:  # the data/export copy (video + caption) was for posting by hand
+            for p in db.query("SELECT remote_id FROM posts WHERE clip_id = ? AND platform = 'export' "
+                              "AND remote_id != ''", (c["id"],)):
+                video = Path(p["remote_id"])
+                if _inside(video, data / "export"):
+                    for f in (video, video.with_suffix(".txt")):
+                        if f.is_file():
+                            remove(f)
     out["freed_mb"] = round(out["freed_mb"], 1)
     if out["raw"] or out["renders"]:
         log.info("retention: deleted %d raw cuts and %d rendered clips (%.0f MB)%s",
