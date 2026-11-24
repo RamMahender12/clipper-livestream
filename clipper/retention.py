@@ -8,6 +8,7 @@ Stream segments are pruned by recorder.Pruner. This handles what's cut from them
   (default 3), and of posted clips after posted_days (default 14). Thumbnails stay for the dashboard.
 - everything above, plus the data/export copy, as soon as a posted clip is up on YouTube or
   Instagram: the dashboard embeds it from there (Drive's copy goes too, see drive.prune_posted).
+- rejected clips (by you, the AI, or expiry) completely, rows included: see purge_rejected.
 
 Queued, rendering, ready and approved clips are never touched, nor is a raw cut another live clip
 still uses. Under [retention].min_free_gb (default 5) free, everything allowed is deleted right away
@@ -105,6 +106,56 @@ def prune_media(db: DB, cfg: dict, now: float | None = None, low_disk: bool | No
     return out
 
 
+def purge_rejected(db: DB, cfg: dict, drive_delete=None) -> int:
+    """Delete rejected clips outright: Drive copy, raw cut, render folder (thumbnail too), export copy and
+    rows. Storage is tight on the server and in Drive, and nobody goes back to a rejected clip."""
+    if drive_delete is None:
+        from .publishers import drive
+
+        drive_delete = (lambda link: drive.delete(cfg, link)) if drive.enabled(cfg) else None
+    data = config_mod.data_dir(cfg)
+    # ids are reused once the newest rows go (no AUTOINCREMENT): leave rejected clips newer than the newest
+    # kept one, so an old Telegram button can't act on a new clip. The next pass takes them.
+    newest = db.one("SELECT MAX(id) AS m FROM clips WHERE status != 'rejected'")["m"] or 0
+    keep_src = {r["source"] for r in db.query("SELECT source FROM clips WHERE status != 'rejected'")}
+    gone: list[int] = []
+    for c in db.query("SELECT id, source, final_path, drive_url FROM clips WHERE status = 'rejected' AND id < ?",
+                      (newest,)):
+        if c["drive_url"]:
+            if not drive_delete:
+                continue  # Drive is signed out: keep the row, or its link (and the file) is lost
+            try:
+                drive_delete(c["drive_url"])
+            except Exception as exc:
+                log.warning("clip %s: Drive delete failed, retrying next pass: %s", c["id"], str(exc)[:200])
+                continue
+        src = Path(c["source"] or "")
+        if c["source"] and c["source"] not in keep_src and _inside(src, data / "raw") and src.is_file():
+            src.unlink(missing_ok=True)
+        if c["final_path"]:
+            folder = Path(c["final_path"]).parent
+            if folder != data / "clips" and _inside(folder, data / "clips"):
+                shutil.rmtree(folder, ignore_errors=True)
+        for p in db.query("SELECT remote_id FROM posts WHERE clip_id = ? AND platform = 'export' "
+                          "AND remote_id != ''", (c["id"],)):
+            video = Path(p["remote_id"])
+            if _inside(video, data / "export"):
+                video.unlink(missing_ok=True)
+                video.with_suffix(".txt").unlink(missing_ok=True)
+        gone.append(c["id"])
+    if gone:
+        marks = ",".join("?" * len(gone))
+        tables = {t["name"] for t in db.query("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        db.execute(f"DELETE FROM posts WHERE clip_id IN ({marks})", gone)
+        if "review_messages" in tables:
+            db.execute(f"DELETE FROM review_messages WHERE clip_id IN ({marks})", gone)
+        if "twitch_clips_seen" in tables:  # keep the row: the same Twitch clip isn't downloaded again
+            db.execute(f"UPDATE twitch_clips_seen SET clip_id = NULL WHERE clip_id IN ({marks})", gone)
+        db.execute(f"DELETE FROM clips WHERE id IN ({marks}) AND status = 'rejected'", gone)
+        log.info("retention: deleted %d rejected clip(s) completely", len(gone))
+    return len(gone)
+
+
 def housekeeping(db: DB, cfg: dict, send=None) -> dict:
     """prune_media, plus a Telegram alert while free space stays under min_free_gb."""
     global _last_alert
@@ -115,6 +166,7 @@ def housekeeping(db: DB, cfg: dict, send=None) -> dict:
 
     if expired := expire_stale(db, cfg):
         log.info("expired %d unreviewed clip(s) past [auto_approve].expire_hours", len(expired))
+    purge_rejected(db, cfg)
     floor = _settings(cfg)["min_free_gb"]
     low = free_gb(data) < floor
     out = prune_media(db, cfg, low_disk=low)

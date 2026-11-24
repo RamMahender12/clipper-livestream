@@ -208,6 +208,17 @@ def build(db: DB, cfg: dict, now: float | None = None) -> dict:
                          "avg": round(sum(p["views"] for p in pp) / len(pp)) if pp else 0,
                          "gained_24h": sum(p["gained_24h"] for p in pp)}
     earned = sum(c["earned"] for c in campaigns)
+    # the clip with the most views across YouTube + Instagram together
+    by_clip: dict[int, dict] = {}
+    for p in posts:
+        if p["platform"] in ("youtube", "instagram"):
+            c = by_clip.setdefault(p["clip_id"], {"clip_id": p["clip_id"], "views": 0, "links": {},
+                                                  "streamer": name.get(p["channel"], p["channel"]),
+                                                  "title": (p["title"] or p["hook"] or "")[:80]})
+            c["views"] += p["views"]
+            c["links"][p["platform"]] = {"url": p["url"], "views": p["views"]}
+    top_clip = max(by_clip.values(), key=lambda c: c["views"], default=None)
+    server_per_day = float(costs.get("server_usd_per_day", 0) or 0)
     return {
         "generated_at": now,
         "overview": {
@@ -217,6 +228,8 @@ def build(db: DB, cfg: dict, now: float | None = None) -> dict:
             "ai_spend": round(ai_total, 2), "server_spend": round(server_total, 2),
             "ai_today": round(ai.spent_today(cfg), 2), "ai_cap": float(cfg["ai"].get("daily_budget_usd", 0) or 0),
             "days_running": round(days_running, 1),
+            "server_per_day": server_per_day, "server_provider": str(costs.get("server_provider", "")),
+            "top_clip": top_clip,
         },
         "campaigns": campaigns,
         "platforms": platforms,
@@ -239,7 +252,8 @@ def build(db: DB, cfg: dict, now: float | None = None) -> dict:
             "paused": [dict(r) for r in db.query("SELECT channel, platform, reason FROM paused_accounts")],
         },
         "notes": {
-            "costs": ("Server cost is an estimate ([costs].server_usd_per_day) and is paid from AWS credits; "
+            "costs": ("Cloud cost is an estimate ([costs].server_usd_per_day × days since [costs].started), "
+                      "not a bill: check your cloud console for the real figure. "
                       "AI spend before per-streamer metering, and the unmetered launch-day spend, are shared by clips made."),
         },
     }

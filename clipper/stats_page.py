@@ -72,6 +72,10 @@ async function load(){
   kpi("Posts",n(o.posts),`${o.days_running} days running`)+
   kpi("Earned (est.)",usd(o.earned),"per-view campaigns; pools pay later","pos")+
   kpi("Spend",usd(o.spend),`AI ${usd(o.ai_spend)} · server ${usd(o.server_spend)}`)+
+  kpi("Cloud cost (est.)",usd(o.server_spend),o.server_per_day?`${usd(o.server_per_day)}/day · ~${usd(o.server_per_day*30)}/month${o.server_provider?" · "+esc(o.server_provider):""}`:"set [costs] in config.toml")+
+  (o.top_clip?kpi("Top clip (YouTube + Instagram)",n(o.top_clip.views)+" views",
+    `#${o.top_clip.clip_id} · ${esc(o.top_clip.streamer)}<br>${["youtube","instagram"].map(k=>o.top_clip.links[k]?`<a href="${esc(o.top_clip.links[k].url)}" target="_blank" rel="noopener">${plat[k]} ${n(o.top_clip.links[k].views)}</a>`:`${plat[k]} –`).join(" · ")}<br>${esc(o.top_clip.title)}`)
+   :kpi("Top clip (YouTube + Instagram)","–","nothing posted yet"))+
   kpi("Net",usd(o.net),o.net<0?"to recover":"in profit",o.net<0?"neg":"pos")+
   kpi("Claude today",usd(o.ai_today),`cap ${usd(o.ai_cap)} · ${o.ai_cap?pct(o.ai_today/o.ai_cap):""}`,o.ai_cap&&o.ai_today>o.ai_cap*.8?"neg":"");
  document.getElementById("camps").innerHTML="<tr><th>Campaign</th><th>Type</th><th class=num>Posts</th><th class=num>Views</th><th class=num>+24 h</th><th class=num>Avg</th><th class=num>Best</th><th class=num>Earned</th><th class=num>Spend</th><th class=num>Net</th><th>Breakeven / progress</th></tr>"+

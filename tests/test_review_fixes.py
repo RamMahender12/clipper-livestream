@@ -501,7 +501,30 @@ class RetentionTests(unittest.TestCase):
         with mock.patch.object(retention, "free_gb", return_value=100.0):
             retention.housekeeping(self.db, self.cfg)
         statuses = sorted(r["status"] for r in self.db.query("SELECT status FROM clips"))
-        self.assertEqual(statuses, ["ready", "rejected"])
+        self.assertEqual(statuses, ["ready"])  # expired, then purged as rejected
+
+    def test_rejected_clips_are_deleted_completely(self):
+        raw, out = self.clip("rejected", "bad", updated=time.time())  # id 1
+        self.db.insert("posts", clip_id=1, platform="youtube", status="error")
+        self.db.execute("UPDATE clips SET drive_url = 'https://drive.google.com/file/d/AAA/view' WHERE id = 1")
+        stuck_raw, _ = self.clip("rejected", "drive-down", updated=time.time())  # id 2
+        self.db.execute("UPDATE clips SET drive_url = 'https://drive.google.com/file/d/BBB/view' WHERE id = 2")
+        self.clip("ready", "keep", updated=time.time())  # id 3
+        newer_raw, _ = self.clip("rejected", "newest", updated=time.time())  # id 4: its id could be reused
+        deleted = []
+
+        def drive_delete(link):
+            if "BBB" in link:
+                raise RuntimeError("Drive HTTP 500")
+            deleted.append(link)
+
+        self.assertEqual(retention.purge_rejected(self.db, self.cfg, drive_delete=drive_delete), 1)
+        self.assertEqual(deleted, ["https://drive.google.com/file/d/AAA/view"])
+        self.assertFalse(raw.exists() or out.exists())  # thumbnail folder too
+        self.assertIsNone(self.db.one("SELECT id FROM clips WHERE id = 1"))
+        self.assertIsNone(self.db.one("SELECT id FROM posts WHERE clip_id = 1"))
+        self.assertTrue(stuck_raw.exists())  # Drive copy not gone yet: keep the row and its link
+        self.assertTrue(newer_raw.exists())
 
     def test_ended_session_segments_are_all_pruned(self):
         seg_dir = self.tmp / "rec" / "lacy" / "00001"
