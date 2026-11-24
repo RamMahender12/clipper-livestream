@@ -52,7 +52,7 @@ Then open http://127.0.0.1:8765. Clips appear under **ready** about a minute aft
 
 ## Run it in the cloud
 
-The same code runs on any Ubuntu server in Docker, behind Caddy with automatic HTTPS and a dashboard password. Current setup: AWS `ap-south-1` (Mumbai), `c7g.xlarge` (4 ARM vCPU, 8 GB), 100 GB disk, fixed IP `16.4.174.31`, dashboard at **https://gta6clipper.dawnlights.in** (user `admin`, password in `secrets/dashboard.txt`).
+The same code runs on any Ubuntu server in Docker, behind Caddy with automatic HTTPS and a dashboard password. Current setup: Oracle Cloud, Oracle Linux 9 (4 vCPU, 15 GB), 100 GB disk, IP `129.225.126.90`, dashboard at **https://clipper.vsrppl.com** (user `admin`, password in `secrets/dashboard.txt`).
 
 Deploy or update (also after editing `config.toml` or anything in `secrets/`):
 

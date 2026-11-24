@@ -151,7 +151,7 @@ DEFAULTS: dict = {
         "min_quality": 6,  # only held clips at least this good are sent to you; auto-approvals always are
         "per_push": 3,  # clips sent per minute while catching up
         "push_every_seconds": 60,
-        "dashboard_url": "https://gta6clipper.dawnlights.in/",
+        "dashboard_url": "https://clipper.vsrppl.com/",
     },
     "twitch_clips": {
         "enabled": True,  # harvest the most-viewed viewer clips (needs TWITCH_CLIENT_ID/SECRET)

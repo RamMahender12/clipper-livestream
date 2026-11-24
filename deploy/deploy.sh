@@ -6,7 +6,7 @@
 # Copies the code, config.toml and secrets/ (API keys, OAuth tokens), builds
 # the image on the server and (re)starts it behind Caddy with HTTPS and a
 # dashboard password. Re-run it after editing config.toml or secrets/.
-# Domain: $CLIPPER_DOMAIN (default gta6clipper.dawnlights.in).
+# Domain: $CLIPPER_DOMAIN (default clipper.vsrppl.com).
 set -euo pipefail
 
 HOST="${1:-}"
@@ -20,7 +20,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-DOMAIN="${CLIPPER_DOMAIN:-gta6clipper.dawnlights.in}"
+DOMAIN="${CLIPPER_DOMAIN:-clipper.vsrppl.com}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 REMOTE=/opt/gta6clipper
 SSH_OPTS="-o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30"
@@ -57,7 +57,7 @@ echo "==> building and starting (first build compiles whisper.cpp: a few minutes
 # the password travels over SSH stdin, never on a command line here
 ssh_ "set -e; cd $REMOTE
   printf 'CLIPPER_DOMAIN=%s\n' '$DOMAIN' > deploy/.env
-  PW=\$(cat)
+  PW=\$(tr -d '\r\n')  # a Windows-made password file ends in CRLF
   HASH=\$(sudo docker run --rm caddy:2 caddy hash-password --plaintext \"\$PW\")
   printf 'basic_auth {\n\tadmin %s\n}\n' \"\$HASH\" > secrets/auth.caddy
   chmod 600 secrets/auth.caddy
@@ -67,7 +67,7 @@ ssh_ "set -e; cd $REMOTE
   sudo docker compose ps" < "$PW_FILE"
 
 echo "==> checking https://$DOMAIN"
-code=$(printf 'user = "admin:%s"\n' "$(cat "$PW_FILE")" \
+code=$(printf 'user = "admin:%s"\n' "$(tr -d '\r\n' < "$PW_FILE")" \
   | curl -s -K - -o /dev/null -w '%{http_code}' --max-time 20 "https://$DOMAIN/api/summary" || true)
 if [ "$code" = "200" ]; then
   echo "    live: https://$DOMAIN  (user admin, password in secrets/dashboard.txt)"
