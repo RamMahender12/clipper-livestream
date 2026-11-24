@@ -117,6 +117,23 @@ class AutoPostTests(unittest.TestCase):
         self.assertTrue(any("next slot" in l for l in lines))
         self.assertEqual(statuses[l1] if tokens["youtube_lacy.json"] == l1 else statuses[l2], "posted")
 
+    def test_waiting_reasons_give_each_clip_a_start_time(self):
+        a, b = self.clip("lacy", 1), self.clip("lacy", 2)
+        w = scheduler.waiting_reasons(self.db, self.cfg)
+        self.assertEqual(w[a], ["youtube: starts in next pass (~1 min)"])
+        self.assertTrue(w[b][0].startswith("youtube: starts in ~1h 01m ("), w)  # 60-min gap
+        self.assertTrue(w[b][0].endswith(", 1 ahead in line"), w)
+
+    def test_slots_respect_gap_and_daily_cap(self):
+        now = 1_000_000.0
+        acct = "acct"
+        for i in range(5):  # cap is 5: posted hourly, the last one 1h ago
+            self.db.insert("posts", clip_id=900 + i, platform="youtube", account=acct, status="published",
+                           posted_at=now - 3600 * (5 - i))
+        s = scheduler._slots(self.db, self.cfg, "youtube", acct, now)
+        # full until the oldest (5h ago) ages out at now + 19h, then the next one an hour later
+        self.assertEqual([next(s) - now for _ in range(2)], [19 * 3600, 20 * 3600])
+
     def test_batch_message(self):
         now = datetime(2026, 11, 19, 7, 0, tzinfo=ZoneInfo("Asia/Kolkata"))
         msg = notify.batch_message(self.cfg, [

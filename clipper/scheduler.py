@@ -9,6 +9,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from typing import Iterator
 
 from . import config as config_mod, guardrails
 from .db import DB
@@ -66,6 +67,95 @@ def post_once(db: DB, cfg: dict) -> list[str]:
         return _post_once(db, cfg)
 
 
+def _approved(db: DB) -> list[dict]:
+    """Approved clips in posting order: human approvals first, then the clips expected to do best."""
+    return [_clip_dict(r) for r in db.query(
+        "SELECT * FROM clips WHERE status = 'approved' ORDER BY (decided_by = 'human') DESC, "
+        "expected_views DESC, quality DESC, score DESC, id ASC")]
+
+
+def _slots(db: DB, cfg: dict, platform: str, account: str, now: float) -> Iterator[float]:
+    """Times this account can post next, in order: min gap after the last post and no more than
+    the daily cap in any 24h, the same rules as guardrails.pacing_ok.
+    ponytail: ignores quiet_hours (empty in config) and upload failures; add if those get used."""
+    posting = cfg["posting"]
+    cap = int(posting.get("max_posts_per_day", {}).get(platform, 10))
+    # export has no gap but still posts one clip per pass, and a pass runs every 60 s
+    gap = 60.0 if platform == "export" else float(posting.get("min_gap_minutes", 45)) * 60
+    times = [r["posted_at"] for r in db.query(
+        "SELECT posted_at FROM posts WHERE platform = ? AND account = ? AND status != 'error' "
+        "AND posted_at > ? ORDER BY posted_at", (platform, account, now - 86400))]
+    t = now
+    while True:
+        if times:
+            t = max(t, times[-1] + gap)
+        window = [x for x in times if x > t - 86400]
+        if len(window) >= cap:
+            t = window[len(window) - cap] + 86400  # when enough of the last day's posts age out
+        times.append(t)
+        yield t
+
+
+def _dur(sec: float) -> str:
+    m = int(sec / 60) + 1
+    return f"{m // 60}h {m % 60:02d}m" if m >= 60 else f"{m} min"
+
+
+def _clock(cfg: dict, ts: float) -> str:
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    dt = datetime.fromtimestamp(ts, ZoneInfo(cfg["posting"].get("timezone", "UTC")))
+    days = (dt.date() - datetime.now(dt.tzinfo).date()).days
+    return f"{dt:%H:%M}" + ("" if days == 0 else " tomorrow" if days == 1 else f" {dt:%a}")
+
+
+def waiting_reasons(db: DB, cfg: dict) -> dict[int, list[str]]:
+    """Why each approved clip hasn't posted yet, per platform, for the review cards.
+    Read-only: the same checks as _post_once, plus the clip's place in its account's line."""
+    from . import takedowns
+    from .publishers import channel_account
+
+    now = time.time()
+    veto = float(cfg.get("auto_approve", {}).get("veto_minutes", 0)) * 60
+    slots: dict[tuple[str, str], Iterator[float]] = {}  # (platform, account) -> its upcoming post times
+    ahead: dict[tuple[str, str], int] = {}              # clips earlier in line for that account
+    out: dict[int, list[str]] = {}
+    for clip in _approved(db):
+        lines = out.setdefault(clip["id"], [])
+        ch = config_mod.channel(cfg, clip["channel"])
+        left = veto - (now - (clip.get("decided_at") or 0)) if clip.get("decided_by") == "auto" else 0
+        for platform in cfg["posting"]["platforms"]:
+            prev = db.one("SELECT status, retry_at FROM posts WHERE clip_id = ? AND platform = ?",
+                          (clip["id"], platform))
+            if prev and prev["status"] != "error":
+                continue  # already there
+            if prev and not (prev["retry_at"] and prev["retry_at"] <= now):
+                if prev["retry_at"]:
+                    lines.append(f"{platform}: retry in {int((prev['retry_at'] - now) / 60) + 1} min")
+                continue  # gave up: the error shows in the Posts row
+            account = channel_account(cfg, ch, platform)
+            allowed, why = guardrails.can_post(cfg, ch, clip, platform)
+            if not account or not allowed:
+                if account:
+                    lines.append(f"{platform}: never ({why})")
+                continue
+            if paused := takedowns.paused(db, account):
+                lines.append(f"{platform}: paused after a takedown ({paused[:60]})")
+                continue
+            key = (platform, account)
+            if key not in slots:
+                slots[key] = _slots(db, cfg, platform, account, now)
+            n = ahead.get(key, 0)
+            ahead[key] = n + 1
+            # ponytail: an auto clip still in its undo window really yields its slot to the next clip;
+            # pushing it back is off by at most veto_minutes for that one clip
+            at = max(next(slots[key]), now + left)
+            when = "next pass (~1 min)" if at - now < 90 else f"~{_dur(at - now)} ({_clock(cfg, at)})"
+            lines.append(f"{platform}: starts in {when}" + (f", {n} ahead in line" if n else ""))
+    return out
+
+
 def _retry_note(cfg: dict, retry_at: float | None, safe: bool, attempts: int) -> str:
     if retry_at:
         from datetime import datetime
@@ -85,10 +175,7 @@ def _post_once(db: DB, cfg: dict) -> list[str]:
     failed: list[str] = []
     platforms = cfg["posting"]["platforms"]
     delays = [float(m) for m in cfg["posting"].get("retry_minutes", RETRY_MINUTES)]
-    # human approvals first, then the clips expected to do best
-    approved = [_clip_dict(r) for r in db.query(
-        "SELECT * FROM clips WHERE status = 'approved' ORDER BY (decided_by = 'human') DESC, "
-        "expected_views DESC, quality DESC, score DESC, id ASC")]
+    approved = _approved(db)
     veto = float(cfg.get("auto_approve", {}).get("veto_minutes", 0)) * 60
     for platform in platforms:
         used: set[str] = set()       # accounts that already posted this pass

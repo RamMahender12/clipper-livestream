@@ -102,6 +102,7 @@ async function load(){
           ${c.decided_by?`<span class="pill ${c.decided_by==="auto"?"auto":""}">${c.decided_by==="auto"?"AI":"you"}: ${esc(c.status)}</span>`:""}
           ${c.drive_url?`<a class="pill" href="${esc(c.drive_url)}" target="_blank" rel="noopener">☁️ Drive</a>`:""}
           ${c.expected_views?`<span class="pill">~${Number(c.expected_views).toLocaleString()} views expected</span>`:""}</div>
+        ${c.waiting&&c.waiting.length?`<div class="decision">⏳ ${c.waiting.map(esc).join(" · ")}</div>`:""}
         ${c.decision_note?`<div class="decision">${esc(c.decision_note)}</div>`:""}
         ${c.source_note?`<div class="note">🎬 ${esc(c.source_note)}</div>`:""}
         ${n.tiebreak?`<div class="note">⚖️ ${esc(n.tiebreak)}</div>`:""}
@@ -212,6 +213,11 @@ def make_handler(db: DB, cfg: dict, watchers: list):
                     (status,),
                 )
                 out = []
+                waiting = {}
+                if status == "approved":
+                    from .scheduler import waiting_reasons
+
+                    waiting = waiting_reasons(db, cfg)
                 for r in rows:
                     d = dict(r)
                     d.pop("words_json", None)
@@ -221,6 +227,7 @@ def make_handler(db: DB, cfg: dict, watchers: list):
                         d["notes"] = {}
                     d["posts"] = [dict(p) for p in db.query(
                         "SELECT id, platform, url, status, error, views FROM posts WHERE clip_id = ?", (r["id"],))]
+                    d["waiting"] = waiting.get(r["id"], [])
                     out.append(d)
                 self._json(out)
             elif url.path == "/stats":
