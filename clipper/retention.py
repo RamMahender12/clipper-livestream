@@ -96,6 +96,10 @@ def housekeeping(db: DB, cfg: dict, send=None) -> dict:
     data = config_mod.data_dir(cfg)
     if not data.exists():
         return {}
+    from .autoapprove import expire_stale
+
+    if expired := expire_stale(db, cfg):
+        log.info("expired %d unreviewed clip(s) past [auto_approve].expire_hours", len(expired))
     floor = _settings(cfg)["min_free_gb"]
     low = free_gb(data) < floor
     out = prune_media(db, cfg, low_disk=low)

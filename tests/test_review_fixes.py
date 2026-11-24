@@ -475,6 +475,15 @@ class RetentionTests(unittest.TestCase):
         self.assertFalse(raw.exists())
         self.assertIn("Disk almost full", sent[0])
 
+    def test_housekeeping_expires_unreviewed_clips_with_auto_approve_off(self):
+        self.cfg["auto_approve"]["enabled"] = False
+        self.clip("ready", "old")  # created 30 days ago
+        self.clip("ready", "new", updated=time.time())
+        with mock.patch.object(retention, "free_gb", return_value=100.0):
+            retention.housekeeping(self.db, self.cfg)
+        statuses = sorted(r["status"] for r in self.db.query("SELECT status FROM clips"))
+        self.assertEqual(statuses, ["ready", "rejected"])
+
     def test_ended_session_segments_are_all_pruned(self):
         seg_dir = self.tmp / "rec" / "lacy" / "00001"
         seg_dir.mkdir(parents=True)

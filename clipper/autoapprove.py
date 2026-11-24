@@ -338,22 +338,30 @@ def approved_in_last_day(db: DB, now: float | None = None) -> int:
         "AND decided_at > ?", (now - 86400,))["n"]
 
 
+def expire_stale(db: DB, cfg: dict, now: float | None = None) -> list[str]:
+    """Launch-week clips go stale fast: drop old undecided ones. Runs even with auto-approve off
+    (retention.housekeeping calls it), or an unreviewed queue fills the disk."""
+    acfg = cfg.get("auto_approve", {})
+    now = now or time.time()
+    expire = float(acfg.get("expire_hours", 0)) * 3600
+    lines: list[str] = []
+    if not expire:
+        return lines
+    stale = db.query(
+        "SELECT id, updated_at FROM clips WHERE status = 'ready' AND COALESCE(decided_by, '') != 'human' "
+        "AND created_at < ?", (now - expire,))
+    for r in stale:
+        if db.update_if("clips", r["id"], {"status": "ready", "updated_at": r["updated_at"]},
+                        status="rejected", decided_by="auto", decided_at=now,
+                        decision_note=f"Expired: still unposted after {acfg['expire_hours']}h"):
+            lines.append(f"clip {r['id']}: expired")
+    return lines
+
+
 def run_once(db: DB, cfg: dict, dry_run: bool = False) -> list[str]:
     acfg = cfg["auto_approve"]
     now = time.time()
-    lines: list[str] = []
-
-    # launch-week clips go stale fast: drop old undecided ones
-    expire = float(acfg.get("expire_hours", 0)) * 3600
-    if expire and not dry_run:
-        stale = db.query(
-            "SELECT id, updated_at FROM clips WHERE status = 'ready' AND COALESCE(decided_by, '') != 'human' "
-            "AND created_at < ?", (now - expire,))
-        for r in stale:
-            if db.update_if("clips", r["id"], {"status": "ready", "updated_at": r["updated_at"]},
-                            status="rejected", decided_by="auto", decided_at=now,
-                            decision_note=f"Expired: still unposted after {acfg['expire_hours']}h"):
-                lines.append(f"clip {r['id']}: expired")
+    lines: list[str] = [] if dry_run else expire_stale(db, cfg, now)
 
     # the video check says it isn't GTA 6 gameplay: it can never post, so it doesn't wait for you
     # (new clips are dropped in the pipeline; this clears ones held before that, or after a redo)
