@@ -30,6 +30,8 @@ h1{font-size:16px;margin:0 12px 0 0;letter-spacing:.02em}
 .stat{color:var(--mute)}.stat b{color:var(--text)}
 nav{display:flex;gap:6px;flex-wrap:wrap}nav button{background:var(--panel);color:var(--mute);border:1px solid var(--line);border-radius:999px;padding:5px 12px;cursor:pointer}
 nav button.on{color:#111;background:var(--accent);border-color:var(--accent)}
+#camps{width:100%}#camps button{border-radius:8px;font-weight:600}#camps button.on{background:#7c5cff;border-color:#7c5cff;color:#fff}
+#camps a{font-size:12px;align-self:center;margin-left:4px}
 #watch{width:100%;color:var(--mute);font-size:12px}
 main{padding:16px;display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:16px}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden;display:flex;flex-direction:column}
@@ -56,6 +58,7 @@ a{color:var(--accent)}
 <header>
   <h1>GTA 6 Clip Review</h1><a href="/stats" style="color:var(--accent);text-decoration:none;margin-right:8px">📊 Stats</a><a href="/live" style="color:var(--accent);text-decoration:none;margin-right:8px">📺 Live posts</a>
   <span class="stat" id="stats"></span>
+  <nav id="camps"></nav>
   <nav id="tabs"></nav>
   <div id="watch"></div>
 </header>
@@ -74,14 +77,24 @@ function player(c){const p=(c.posts||[]).filter(p=>p.status==="published").map(p
   return c.final_path?`<video src="/media/${c.id}.mp4" controls preload="none" poster="/thumb/${c.id}.jpg"></video>`:""}
 function tabs(counts){document.getElementById("tabs").innerHTML=TABS.map(t=>`<button class="${t===tab?"on":""}" onclick="setTab('${t}')">${t} ${counts[t]||0}</button>`).join("")}
 function setTab(t){tab=t;load()}
+// campaign tabs: see one campaign's clips at a time (remembered in this browser)
+let camp="all";try{camp=localStorage.getItem("camp")||"all"}catch(e){}
+function setCamp(c){camp=c;try{localStorage.setItem("camp",c)}catch(e){}load()}
+function camps(list,all){
+  if(camp!=="all"&&!list.some(c=>c.id===camp))camp="all";
+  const sel=list.find(c=>c.id===camp);
+  document.getElementById("camps").innerHTML=[{id:"all",name:"All campaigns",counts:all}].concat(list).map(c=>
+    `<button class="${c.id===camp?"on":""}" onclick="setCamp('${esc(c.id)}')">${esc(c.name)} · ${c.counts[tab]||0}</button>`).join("")+
+    (sel&&sel.url?`<a href="${esc(sel.url)}" target="_blank" rel="noopener">campaign page ↗</a>`:"");
+  return sel?sel.counts:all}
 async function load(){
-  const [clips,sum]=await Promise.all([fetch(`/api/clips?status=${tab}`).then(r=>r.json()),fetch("/api/summary").then(r=>r.json())]);
+  const [clips,sum]=await Promise.all([fetch(`/api/clips?status=${tab}&campaign=${encodeURIComponent(camp)}`).then(r=>r.json()),fetch("/api/summary").then(r=>r.json())]);
   const a=sum.auto||{};
   document.getElementById("stats").innerHTML=`<b>${sum.posts}</b> posts · <b>${sum.views.toLocaleString()}</b> views · est <b>$${sum.est_usd.toFixed(2)}</b> · auto-approve <b>${a.enabled?"ON":"off"}</b>${a.enabled?` ${a.today}/${a.limit} today · history ${a.history}/${a.min_history}`:""}`;
   document.getElementById("watch").textContent=(sum.watchers||[]).join("  |  ");
-  tabs(sum.clips||{});
+  tabs(camps(sum.campaigns||[],sum.clips||{}));
   const g=document.getElementById("grid");
-  if(!clips.length){g.innerHTML=`<div class="empty">No ${tab} clips.</div>`;return}
+  if(!clips.length){g.innerHTML=`<div class="empty">No ${tab} clips${camp==="all"?"":" in this campaign"}.</div>`;return}
   g.innerHTML=clips.map(c=>{
     const n=c.notes||{};
     const posts=(c.posts||[]).map(p=>`<div class="post"><b>${esc(p.platform)}</b> ${esc(p.status)}${p.error?" "+esc(p.error):""}
@@ -208,10 +221,19 @@ def make_handler(db: DB, cfg: dict, watchers: list):
                 self.wfile.write(body)
             elif url.path == "/api/clips":
                 status = parse_qs(url.query).get("status", ["ready"])[0]
+                camp = parse_qs(url.query).get("campaign", ["all"])[0]
+                where, params = "status = ?", [status]
+                active = [c["id"] for c in cfg.get("campaigns", []) if c.get("active")]
+                if camp == "none":  # no campaign, or one that's no longer active
+                    where += f" AND COALESCE(campaign_id, '') NOT IN ({','.join('?' * len(active)) or "''"})"
+                    params += active
+                elif camp != "all":
+                    where += " AND campaign_id = ?"
+                    params.append(camp)
                 rows = db.query(
-                    f"SELECT * FROM clips WHERE status = ? ORDER BY {config_mod.priority_order(cfg)}"
+                    f"SELECT * FROM clips WHERE {where} ORDER BY {config_mod.priority_order(cfg)}"
                     "quality DESC, score DESC, id DESC LIMIT 200",
-                    (status,),
+                    params,
                 )
                 out = []
                 waiting = {}
@@ -261,6 +283,19 @@ def make_handler(db: DB, cfg: dict, watchers: list):
                 s = scheduler.earnings_summary(db, cfg)
                 s["watchers"] = [f"{w.login}: {w.status}" for w in watchers]
                 s["auto"] = autoapprove.status(db, cfg)
+                # one tab per campaign: clip counts by status, so you check and submit one campaign at a time
+                counts: dict[str, dict[str, int]] = {}
+                for r in db.query("SELECT campaign_id, status, COUNT(*) AS n FROM clips GROUP BY campaign_id, status"):
+                    counts.setdefault(r["campaign_id"] or "", {})[r["status"]] = r["n"]
+                camps = [{"id": c["id"], "name": c.get("name") or c["id"], "url": c.get("url", ""),
+                          "counts": counts.pop(c["id"], {})} for c in cfg.get("campaigns", []) if c.get("active")]
+                leftover: dict[str, int] = {}  # no campaign, or one that's no longer active
+                for by_status in counts.values():
+                    for st, n in by_status.items():
+                        leftover[st] = leftover.get(st, 0) + n
+                if leftover:
+                    camps.append({"id": "none", "name": "No campaign", "url": "", "counts": leftover})
+                s["campaigns"] = camps
                 self._json(s)
             elif m := re.fullmatch(r"/media/(\d+)\.mp4", url.path):
                 row = self._clip(int(m.group(1)))

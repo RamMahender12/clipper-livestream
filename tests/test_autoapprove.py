@@ -326,6 +326,23 @@ class ReviewApiTests(unittest.TestCase):
             summary = json.load(r)
         self.assertTrue(summary["auto"]["enabled"])
 
+    def test_campaign_tabs_filter_clips(self):
+        self.cfg["campaigns"] = [{"id": "speedcamp", "name": "Speed", "active": True},
+                                 {"id": "oldcamp", "name": "Old", "active": False}]
+        for camp in ("speedcamp", "speedcamp", "oldcamp", ""):
+            cid = add_clip(self.db, self.tmp, status="ready")
+            self.db.execute("UPDATE clips SET campaign_id = ? WHERE id = ?", (camp, cid))
+
+        def get(path):
+            with urllib.request.urlopen(self.base + path) as r:
+                return json.load(r)
+
+        self.assertEqual(len(get("/api/clips?status=ready&campaign=speedcamp")), 2)
+        self.assertEqual(len(get("/api/clips?status=ready&campaign=none")), 2)  # inactive + no campaign
+        self.assertEqual(len(get("/api/clips?status=ready")), 4)
+        tabs = {c["id"]: c["counts"] for c in get("/api/summary")["campaigns"]}
+        self.assertEqual(tabs, {"speedcamp": {"ready": 2}, "none": {"ready": 2}})
+
 
 if __name__ == "__main__":
     unittest.main()
