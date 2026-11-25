@@ -170,7 +170,8 @@ def build(db: DB, cfg: dict, now: float | None = None) -> tuple[str, dict]:
     # waiting for you
     waiting = [dict(r) for r in db.query(
         "SELECT c.id, c.channel, c.quality, c.hook FROM clips c JOIN review_messages m ON m.clip_id = c.id "
-        "AND m.kind = 'review' WHERE c.status = 'ready' ORDER BY c.quality DESC, c.score DESC")] \
+        "AND m.kind = 'review' WHERE c.status = 'ready' "
+        f"ORDER BY {config_mod.priority_order(cfg, 'c.channel')}c.quality DESC, c.score DESC")] \
         if db.one("SELECT name FROM sqlite_master WHERE name = 'review_messages'") else []
     if waiting:
         lines += ["", f"Waiting for you ({len(waiting)}), best first:"]

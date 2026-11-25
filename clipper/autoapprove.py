@@ -383,7 +383,7 @@ def run_once(db: DB, cfg: dict, dry_run: bool = False) -> list[str]:
         "SELECT c.*, s.top_terms AS spike_terms FROM clips c LEFT JOIN spikes s ON s.id = c.spike_id "
         "WHERE c.status = 'ready' AND COALESCE(c.decided_by, '') != 'human' "
         "AND (c.auto_checked_at IS NULL OR c.auto_checked_at < c.updated_at) "
-        "ORDER BY c.score DESC LIMIT ?", (int(acfg.get("batch", 10)),))
+        f"ORDER BY {config_mod.priority_order(cfg, 'c.channel')}c.score DESC LIMIT ?", (int(acfg.get("batch", 10)),))
     for row in rows:
         clip = dict(row)
         try:

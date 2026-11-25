@@ -67,11 +67,12 @@ def post_once(db: DB, cfg: dict) -> list[str]:
         return _post_once(db, cfg)
 
 
-def _approved(db: DB) -> list[dict]:
-    """Approved clips in posting order: human approvals first, then the clips expected to do best."""
+def _approved(db: DB, cfg: dict) -> list[dict]:
+    """Approved clips in posting order: [posting].priority streamers first, then human approvals,
+    then the clips expected to do best."""
     return [_clip_dict(r) for r in db.query(
-        "SELECT * FROM clips WHERE status = 'approved' ORDER BY (decided_by = 'human') DESC, "
-        "expected_views DESC, quality DESC, score DESC, id ASC")]
+        f"SELECT * FROM clips WHERE status = 'approved' ORDER BY {config_mod.priority_order(cfg)}"
+        "(decided_by = 'human') DESC, expected_views DESC, quality DESC, score DESC, id ASC")]
 
 
 def _slots(db: DB, cfg: dict, platform: str, account: str, now: float) -> Iterator[tuple[float, str]]:
@@ -125,7 +126,7 @@ def waiting_reasons(db: DB, cfg: dict) -> dict[int, list[str]]:
     slots: dict[tuple[str, str], Iterator[tuple[float, str]]] = {}  # (platform, account) -> upcoming posts
     ahead: dict[tuple[str, str], int] = {}                          # clips earlier in line for that account
     out: dict[int, list[str]] = {}
-    for clip in _approved(db):
+    for clip in _approved(db, cfg):
         lines = out.setdefault(clip["id"], [])
         ch = config_mod.channel(cfg, clip["channel"])
         left = veto - (now - (clip.get("decided_at") or 0)) if clip.get("decided_by") == "auto" else 0
@@ -192,7 +193,7 @@ def _post_once(db: DB, cfg: dict) -> list[str]:
     failed: list[str] = []
     platforms = cfg["posting"]["platforms"]
     delays = [float(m) for m in cfg["posting"].get("retry_minutes", RETRY_MINUTES)]
-    approved = _approved(db)
+    approved = _approved(db, cfg)
     veto = float(cfg.get("auto_approve", {}).get("veto_minutes", 0)) * 60
     for platform in platforms:
         used: set[str] = set()       # accounts that already posted this pass

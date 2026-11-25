@@ -13,7 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import autoapprove, scheduler
+from . import autoapprove, config as config_mod, scheduler
 from .db import DB
 
 log = logging.getLogger(__name__)
@@ -209,7 +209,8 @@ def make_handler(db: DB, cfg: dict, watchers: list):
             elif url.path == "/api/clips":
                 status = parse_qs(url.query).get("status", ["ready"])[0]
                 rows = db.query(
-                    "SELECT * FROM clips WHERE status = ? ORDER BY quality DESC, score DESC, id DESC LIMIT 200",
+                    f"SELECT * FROM clips WHERE status = ? ORDER BY {config_mod.priority_order(cfg)}"
+                    "quality DESC, score DESC, id DESC LIMIT 200",
                     (status,),
                 )
                 out = []

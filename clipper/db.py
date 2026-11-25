@@ -155,13 +155,14 @@ class DB:
                            (*fields.values(), row_id, *expect.values()))
         return cur.rowcount > 0
 
-    def claim_clip(self, from_status: str, to_status: str) -> sqlite3.Row | None:
+    def claim_clip(self, from_status: str, to_status: str, order: str = "") -> sqlite3.Row | None:
         """Atomically move the best-scored clip from one status to another. Safe across processes
-        too: if another connection claims the same clip first, the next one is tried."""
+        too: if another connection claims the same clip first, the next one is tried.
+        `order` is an ORDER BY prefix (config.priority_order) that goes first."""
         with self._lock:
             for _ in range(10):
                 row = self.conn.execute(
-                    "SELECT * FROM clips WHERE status = ? ORDER BY score DESC, id ASC LIMIT 1",
+                    f"SELECT * FROM clips WHERE status = ? ORDER BY {order}score DESC, id ASC LIMIT 1",
                     (from_status,),
                 ).fetchone()
                 if not row:

@@ -121,7 +121,8 @@ def pending_review(db: DB, cfg: dict, limit: int) -> list[dict]:
     db.conn.executescript(SCHEMA)
     rows = db.query(
         "SELECT c.* FROM clips c LEFT JOIN review_messages m ON m.clip_id = c.id AND m.kind = 'review' "
-        "WHERE c.status = 'ready' AND m.clip_id IS NULL ORDER BY c.quality DESC, c.score DESC, c.id DESC")
+        "WHERE c.status = 'ready' AND m.clip_id IS NULL "
+        f"ORDER BY {config_mod.priority_order(cfg, 'c.channel')}c.quality DESC, c.score DESC, c.id DESC")
     out = []
     for r in rows:
         d = dict(r)

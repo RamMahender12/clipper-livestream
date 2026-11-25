@@ -583,7 +583,7 @@ class RenderWorker(threading.Thread):
                     retention.housekeeping(self.db, self.cfg)
                 except Exception:
                     log.exception("media cleanup failed")
-            row = self.db.claim_clip("queued", "rendering")
+            row = self.db.claim_clip("queued", "rendering", config_mod.priority_order(self.cfg))
             if not row:
                 if time.time() - last_redo > 60:  # idle: catch up on clips AI couldn't review earlier
                     last_redo = time.time()
@@ -605,7 +605,7 @@ def drain_queue(db: DB, cfg: dict) -> int:
     """Render every queued clip in this thread (used by one-shot CLI commands)."""
     n = 0
     while True:
-        row = db.claim_clip("queued", "rendering")
+        row = db.claim_clip("queued", "rendering", config_mod.priority_order(cfg))
         if not row:
             return n
         try:

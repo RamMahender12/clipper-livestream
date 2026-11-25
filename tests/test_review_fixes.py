@@ -425,6 +425,29 @@ class PublisherRetryFlagTests(unittest.TestCase):
             self.assertFalse(pub.publish(self.video, meta).retry)
 
 
+class PriorityTests(unittest.TestCase):
+    def test_priority_streamers_render_and_post_first(self):
+        tmp = Path(tempfile.mkdtemp())
+        cfg = config_mod._merge(config_mod.DEFAULTS, {"paths": {"data_dir": str(tmp)},
+                                                       "posting": {"priority": ["IShowSpeed", "asianjeff"]}})
+        db = DB(tmp / "t.db")
+        now = time.time()
+        for ch, score in (("ludwig", 9.0), ("asianjeff", 5.0), ("ishowspeed", 1.0), ("ludwig", 8.0)):
+            db.insert("clips", channel=ch, status="approved", score=score, created_at=now, updated_at=now)
+        self.assertEqual([c["channel"] for c in scheduler._approved(db, cfg)],
+                         ["ishowspeed", "asianjeff", "ludwig", "ludwig"])
+        db.insert("clips", channel="ludwig", status="queued", score=9.0, created_at=now, updated_at=now)
+        db.insert("clips", channel="ishowspeed", status="queued", score=1.0, created_at=now, updated_at=now)
+        self.assertEqual(db.claim_clip("queued", "rendering", config_mod.priority_order(cfg))["channel"],
+                         "ishowspeed")
+
+    def test_priority_order_only_lets_logins_through(self):
+        cfg = {"posting": {"priority": ["speed'; DROP TABLE clips; --", ""]}}
+        self.assertEqual(config_mod.priority_order(cfg),
+                         "CASE lower(channel) WHEN 'speeddroptableclips' THEN 0 ELSE 1 END, ")
+        self.assertEqual(config_mod.priority_order({}), "")
+
+
 class RetentionTests(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())

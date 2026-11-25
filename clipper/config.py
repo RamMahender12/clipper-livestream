@@ -6,6 +6,7 @@ files under secrets/ (both git-ignored).
 from __future__ import annotations
 
 import copy
+import re
 import tomllib
 from pathlib import Path
 
@@ -83,6 +84,7 @@ DEFAULTS: dict = {
     },
     "review": {"host": "127.0.0.1", "port": 8765},
     "posting": {
+        "priority": [],  # Twitch logins served first, in this order, for rendering, review and posting
         "submit_minutes": 30,  # Content Rewards: submit each post link within this long
         "remind_after_minutes": 20,  # Telegram reminder if the ✅ button isn't tapped by then
         "takedown_check_hours": 3,  # check every post for takedowns this often (pauses the account on one)
@@ -296,6 +298,17 @@ def campaign(cfg: dict, campaign_id: str | None) -> dict | None:
         if c.get("id") == campaign_id:
             return c
     return None
+
+
+def priority_order(cfg: dict, col: str = "channel") -> str:
+    """ORDER BY prefix that puts [posting].priority streamers first, in list order, e.g.
+    "CASE lower(channel) WHEN 'ishowspeed' THEN 0 WHEN 'asianjeff' THEN 1 ELSE 2 END, ". Empty if unset."""
+    logins = [re.sub(r"[^a-z0-9_]", "", str(x).lower()) for x in cfg.get("posting", {}).get("priority", [])]
+    logins = [x for x in logins if x]  # Twitch logins only: nothing else reaches the SQL
+    if not logins:
+        return ""
+    cases = " ".join(f"WHEN '{x}' THEN {i}" for i, x in enumerate(logins))
+    return f"CASE lower({col}) {cases} ELSE {len(logins)} END, "
 
 
 def channel(cfg: dict, login: str) -> dict | None:
