@@ -22,5 +22,18 @@ class LogoTest(unittest.TestCase):
             self.assertTrue(config_mod.resolve(cfg, camp["logo"]).is_file(), ch.get("login"))
 
 
+    def test_clipup_caption_always_has_clipup_tag(self):
+        from clipper.publishers.base import PostMeta, caption_with_tags
+        from clipper.scheduler import with_required_tags
+        cfg = config_mod.load()
+        ch = next(c for c in cfg["channels"] if c.get("permission") == "campaign:clipup")
+        camp = guardrails.campaign_for(cfg, ch)
+        for stored in ("funny,gaming", "Clipup,gta6", ""):  # a review edit dropped it / kept it / cleared all
+            tags = with_required_tags(ch, camp, stored)
+            self.assertEqual(sum(t.lower() == "clipup" for t in tags), 1, stored)
+            text = caption_with_tags(PostMeta(title="t", caption="lol", hashtags=tags))
+            self.assertIn("#clipup", text.lower())
+
+
 if __name__ == "__main__":
     unittest.main()

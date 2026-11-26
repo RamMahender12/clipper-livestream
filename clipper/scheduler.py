@@ -13,6 +13,14 @@ from typing import Iterator
 
 from . import config as config_mod, guardrails
 from .db import DB
+from .metadata import required_tags
+
+
+def with_required_tags(ch: dict, camp: dict | None, stored: str | None) -> list[str]:
+    """Stored hashtags, with the brief's required ones put back first if a review edit dropped them."""
+    tags = [t.strip().lstrip("#") for t in (stored or "").split(",") if t.strip()]
+    have = {t.lower() for t in tags}
+    return [t for t in required_tags(ch, camp) if t.lower() not in have] + tags
 
 log = logging.getLogger(__name__)
 
@@ -231,7 +239,7 @@ def _post_once(db: DB, cfg: dict) -> list[str]:
             meta = PostMeta(
                 title=clip["title"] or f"GTA 6 clip #{clip['id']}",
                 caption=clip["caption"],
-                hashtags=[t for t in (clip["hashtags"] or "").split(",") if t],
+                hashtags=with_required_tags(ch, camp, clip["hashtags"]),
                 is_paid_promotion=bool(camp and camp.get("paid_promotion", True)),
                 clip_id=clip["id"],
                 take=_take(clip),
