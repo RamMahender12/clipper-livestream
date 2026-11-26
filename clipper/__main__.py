@@ -215,6 +215,8 @@ def cmd_run(args, cfg, review_only: bool = False) -> int:
     watchers = []
     if not review_only and not args.no_watch:
         for ch in cfg["channels"]:
+            if ch.get("platform", "twitch") != "twitch":  # e.g. ai_lucia: videos are built, not recorded
+                continue
             w = watcher.ChannelWatcher(db, cfg, ch, stop)
             w.start()
             watchers.append(w)
@@ -468,6 +470,15 @@ def cmd_gemini_review(args, cfg) -> int:
     return 0
 
 
+def cmd_lucia(args, cfg) -> int:
+    """Build Lucia-campaign promo videos now (housekeeping also keeps keep_ready of them waiting)."""
+    from . import lucia
+
+    for cid in lucia.make(open_db(cfg), cfg, args.count):
+        print(f"clip #{cid} ready for review (campaign: lucia)")
+    return 0
+
+
 def cmd_twitch_clips(args, cfg) -> int:
     """Harvest viewer clips now (runs every few minutes inside `clipper run`)."""
     from . import twitch_clips
@@ -665,6 +676,8 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("launch-times")
     sub.add_parser("campaigns", help="check for new Content Rewards campaigns now")
     sub.add_parser("twitch-clips", help="harvest the most-viewed Twitch viewer clips now")
+    lu = sub.add_parser("lucia", help="build Lucia-campaign promo videos from the brand's AI clips")
+    lu.add_argument("-n", "--count", type=int, default=3)
     sub.add_parser("instagram-tokens", help="make non-expiring Instagram Page tokens and check all tokens")
     sub.add_parser("takedowns", help="check every post for takedowns now")
     p_digest = sub.add_parser("digest", help="show the morning digest now")
@@ -700,7 +713,7 @@ def main(argv: list[str] | None = None) -> int:
         "auth": cmd_auth, "autoreview": cmd_autoreview, "service": cmd_service,
         "instagram-accounts": cmd_instagram_accounts, "telegram": cmd_telegram,
         "campaigns": cmd_campaigns, "gemini-review": cmd_gemini_review,
-        "twitch-clips": cmd_twitch_clips, "instagram-tokens": cmd_instagram_tokens,
+        "twitch-clips": cmd_twitch_clips, "lucia": cmd_lucia, "instagram-tokens": cmd_instagram_tokens,
         "takedowns": cmd_takedowns, "resume": cmd_resume, "digest": cmd_digest,
     }
     if args.cmd == "review":

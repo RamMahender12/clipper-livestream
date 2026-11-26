@@ -167,6 +167,13 @@ def housekeeping(db: DB, cfg: dict, send=None) -> dict:
     if expired := expire_stale(db, cfg):
         log.info("expired %d unreviewed clip(s) past [auto_approve].expire_hours", len(expired))
     purge_rejected(db, cfg)
+    try:
+        from . import lucia
+
+        if made := lucia.top_up(db, cfg):
+            log.info("lucia: built %d promo video(s) for review: %s", len(made), made)
+    except Exception:
+        log.exception("lucia: building promo videos failed")
     floor = _settings(cfg)["min_free_gb"]
     low = free_gb(data) < floor
     out = prune_media(db, cfg, low_disk=low)
