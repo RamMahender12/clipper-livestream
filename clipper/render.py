@@ -23,7 +23,7 @@ def build_filtergraph(
     zoom: float = 1.0,
     logo: bool = False,
 ) -> str:
-    """`logo`: a second input (image) goes in the top-left corner, above the credit and hook."""
+    """`logo`: a second input (image) goes in the bottom-right corner, under the captions."""
     w, h = width, height
     zw = max(w, int(w * zoom) // 2 * 2)
     if layout == "facecam_split" and facecam:
@@ -48,10 +48,11 @@ def build_filtergraph(
             f"[bgb][fgs]overlay=(W-w)/2:(H-h)/2[base]"
         )
     base = "base"
-    if logo:  # campaign branding, e.g. ClipUp: small, top-left, clear of the centred credit and hook
-        lw = int(w * 0.16) // 2 * 2
-        graph += (f";[1:v]scale={lw}:-1,format=rgba,colorchannelmixer=aa=0.92[lg];"
-                  f"[base][lg]overlay={int(w * 0.035)}:{int(h * 0.02)}[branded]")
+    if logo:  # ClipUp brief: their file, half the width, bottom-right like their example, never
+        # recoloured/cropped; sits below the captions (they end 24.5% above the bottom edge)
+        lw = int(w * 0.5) // 2 * 2
+        graph += (f";[1:v]scale={lw}:-1,format=rgba[lg];"
+                  f"[base][lg]overlay=W-w-{int(w * 0.02)}:H-h-{int(h * 0.04)}[branded]")
         base = "branded"
     if ass_path:
         graph += f";[{base}]ass=filename={_escape_filter_path(ass_path)}[v]"
