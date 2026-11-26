@@ -80,6 +80,9 @@ def instagram_container_params(meta: PostMeta, igcfg: dict) -> dict:
         # "Paid partnership" label; documented as usable on its own (no sponsor ids)
         # and only with the Facebook Login flavour of the API, which is what we use.
         params["is_paid_partnership"] = "true"
+    if igcfg.get("trial_reels"):
+        # shown to non-followers first; Instagram shares it to followers if it performs
+        params["trial_params"] = json.dumps({"graduation_strategy": "SS_PERFORMANCE"})
     return params
 
 
@@ -280,8 +283,16 @@ class InstagramPublisher(Publisher):
         # with a brand-new container rather than re-sending to the same one.
         container_id = ""
         for attempt in range(1, 4):
-            container = self._post(f"{ig_id}/media", retry=False,
-                                   **instagram_container_params(meta, self._ig))
+            params = instagram_container_params(meta, self._ig)
+            try:
+                container = self._post(f"{ig_id}/media", retry=False, **params)
+            except _ApiError as exc:
+                if "trial_params" not in params or exc.transient:
+                    raise
+                # not eligible, or over Instagram's trial-reel allowance: post it as a normal reel
+                log.warning("instagram refused a trial reel (%s); posting a normal reel", exc)
+                params.pop("trial_params")
+                container = self._post(f"{ig_id}/media", retry=False, **params)
             container_id = container.get("id")
             if not container_id:
                 raise _ApiError("Instagram did not return a container id")

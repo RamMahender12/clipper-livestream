@@ -21,7 +21,7 @@ What you get: the streamer's credit line, the clip transcript (auto-generated, m
 Write:
 - hook: on-screen text for the first 3 seconds, at most 7 words. It must make a scrolling viewer stop, and it must be true to what happens in the clip. No clickbait that the clip doesn't pay off.
 - title: at most 70 characters, for YouTube Shorts. Include "GTA 6".
-- caption: 1-2 short lines for TikTok/Instagram, then the credit line on its own line. If the campaign requires a disclosure (for example "#ad"), put it at the very start of the caption.
+- caption: 1-2 short lines for TikTok/Instagram, ending with a short question to the viewer about this moment that invites a comment (e.g. "would you have hit the brakes?"), then the credit line on its own line. If the campaign requires a disclosure (for example "#ad"), put it at the very start of the caption.
 - hashtags: 3-5 tags without spaces, always including gta6. Include any tags the campaign requires.
 - take: the page's own commentary, at most 80 characters, shown on screen for the rest of the clip after the hook, and first in the YouTube description. A reaction, opinion or bit of game context in your own voice that adds something; never a restatement of the hook or of what happens. Same clean-language rules as the hook: no swearing, no violence or crime words, no spoilers.
 - spoiler_risk: "high" if the clip or your text reveals story events (mission outcomes, character deaths or betrayals, plot twists, the ending, or an isolated cutscene); "low" if it shows early story context; otherwise "none". Rockstar has spoiler footage taken down, and spoilers make viewers angry, so when unsure choose the higher level. Never put spoilers in the hook, title or caption.
@@ -80,6 +80,20 @@ def required_tags(channel_cfg: dict, campaign: dict | None) -> list[str]:
         if t.startswith("#") and t[1:] and t[1:] not in out:
             out.append(t[1:])
     return out
+
+
+QUESTIONS = ["Would you have done the same? 👇", "What would you have done here? 👇", "Rate this moment 1-10 👇",
+             "Who else saw that coming? 👇", "Worst or best GTA 6 moment so far? 👇"]
+
+
+def with_question(caption: str, clip_id: int) -> str:
+    """Comments push a post further: a caption without a question gets one, just above the credit line."""
+    if "?" in caption:
+        return caption
+    q = QUESTIONS[clip_id % len(QUESTIONS)]
+    lines = caption.split("\n")
+    at = next((i for i, l in enumerate(lines) if l.startswith("Credit:")), len(lines))
+    return "\n".join(lines[:at] + [q] + lines[at:])
 
 
 def enforce_caption(caption: str, channel_cfg: dict) -> str:

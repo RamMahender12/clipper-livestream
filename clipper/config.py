@@ -92,6 +92,7 @@ DEFAULTS: dict = {
         "min_gap_minutes": 45,
         "max_posts_per_day": {"youtube": 10, "instagram": 8, "tiktok": 5, "export": 1000},
         "quiet_hours": [],  # e.g. [2, 3, 4, 5] local hours with no posting
+        "instagram_min_quality": 0,  # only clips the AI scored at least this (1-10) go to Instagram
         "timezone": "Asia/Kolkata",
         # GTA 6's first official unlock (New Zealand). Live clips recorded earlier are never posted.
         "earliest_footage": "2026-11-18T11:00:00+00:00",
@@ -220,6 +221,7 @@ DEFAULTS: dict = {
         "access_token_env": "IG_ACCESS_TOKEN",
         "graph_version": "v27.0",
         "share_to_feed": True,
+        "trial_reels": False,  # post as trial reels (non-followers first, shared on if they do well)
         "tokens_file": "secrets/instagram_tokens.json",  # per-account Page tokens (made automatically)
         "check_hours": 6,  # how often tokens are checked
         "warn_days": 14,  # Telegram warning this long before anything needs you

@@ -59,6 +59,17 @@ def before_release(cfg: dict, clip: dict) -> str:
     return ""
 
 
+def filler_packaging(clip: dict) -> bool:
+    """Template hook/caption written while Claude was over budget, and still unedited by you."""
+    import json
+
+    try:
+        notes = json.loads(clip.get("ai_notes") or "{}")
+    except json.JSONDecodeError:
+        return False
+    return bool(notes.get("packaging_error")) and (clip.get("hook") or "") == notes.get("template_hook")
+
+
 def can_post(cfg: dict, channel_cfg: dict | None, clip: dict, platform: str) -> tuple[bool, str]:
     kind, detail = permission(channel_cfg)
     if not kind:
@@ -73,6 +84,11 @@ def can_post(cfg: dict, channel_cfg: dict | None, clip: dict, platform: str) -> 
         return False, "flagged as a story spoiler"
     if clip.get("unsafe"):
         return False, "flagged unsafe"
+    if platform != "export" and filler_packaging(clip):
+        return False, "filler hook and caption (AI was over budget): waiting for the AI rewrite"
+    min_q = int(cfg.get("posting", {}).get("instagram_min_quality", 0))
+    if platform == "instagram" and int(clip.get("quality") or 0) < min_q:
+        return False, f"AI quality {clip.get('quality') or 0}/10 is under Instagram's bar of {min_q}"
     if kind == "campaign":
         camp = config_mod.campaign(cfg, detail)
         if not camp:

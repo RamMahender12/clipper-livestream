@@ -242,10 +242,13 @@ def redo_after_outage(db: DB, cfg: dict, now: float | None = None) -> int | None
 
     now = now or time.time()
     up = ai.available(cfg)[0]
+    # approved clips too: filler packaging never posts (guardrails.filler_packaging), so once AI
+    # rewrites it the clip comes back to you to approve the new hook
     rows = db.query(
-        "SELECT * FROM clips WHERE status = 'ready' AND COALESCE(decided_by, '') != 'human' "
-        "AND (ai_notes LIKE '%packaging_error%' OR ai_notes LIKE '%gemini_error%') "
-        "ORDER BY score DESC, id ASC")
+        "SELECT * FROM clips WHERE ((status = 'ready' AND COALESCE(decided_by, '') != 'human' "
+        "AND (ai_notes LIKE '%packaging_error%' OR ai_notes LIKE '%gemini_error%')) "
+        "OR (status = 'approved' AND ai_notes LIKE '%packaging_error%')) "
+        f"ORDER BY {config_mod.priority_order(cfg)}score DESC, id ASC")
     for r in rows:
         clip = dict(r)
         notes = _notes(clip)
@@ -258,8 +261,10 @@ def redo_after_outage(db: DB, cfg: dict, now: float | None = None) -> int | None
         if step == "check" and gemini.BREAKER.paused():
             continue
         notes.update(ai_redos=tries + 1, ai_redo_at=now)
-        if not db.update_if("clips", clip["id"], {"status": "ready", "updated_at": clip["updated_at"]},
-                            status="rendering", ai_notes=json.dumps(notes)):
+        again = {"decision_note": "AI rewrote the filler hook and caption: approve again"} \
+            if clip["status"] == "approved" else {}
+        if not db.update_if("clips", clip["id"], {"status": clip["status"], "updated_at": clip["updated_at"]},
+                            status="rendering", ai_notes=json.dumps(notes), **again):
             continue  # you acted on it just now
         log.info("clip %s: AI is back, redoing the %s (try %d)", clip["id"],
                  "packaging" if step == "package" else "video check", tries + 1)
@@ -271,7 +276,7 @@ def redo_after_outage(db: DB, cfg: dict, now: float | None = None) -> int | None
                 check_and_finish(db, cfg, clip["id"], own_hook=True)
         except Exception as exc:  # keep the clip as it was, still reviewable by you
             log.warning("clip %s: redo failed: %s", clip["id"], exc)
-            _finish(db, clip["id"], status="ready")
+            _finish(db, clip["id"], status=r["status"])  # back where it was (ready or approved)
         return clip["id"]
     return None
 

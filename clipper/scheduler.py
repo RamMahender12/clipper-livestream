@@ -13,7 +13,7 @@ from typing import Iterator
 
 from . import config as config_mod, guardrails
 from .db import DB
-from .metadata import required_tags
+from .metadata import required_tags, with_question
 
 
 def with_required_tags(ch: dict, camp: dict | None, stored: str | None) -> list[str]:
@@ -86,7 +86,7 @@ def _approved(db: DB, cfg: dict) -> list[dict]:
 def _slots(db: DB, cfg: dict, platform: str, account: str, now: float) -> Iterator[tuple[float, str]]:
     """(time, why it's then) for each upcoming post of this account, in order: min gap after the
     last post and no more than the daily cap in any 24h, the same rules as guardrails.pacing_ok.
-    ponytail: ignores quiet_hours (empty in config) and upload failures; add if those get used."""
+    ponytail: ignores upload failures; add if those get used."""
     posting = cfg["posting"]
     cap = int(posting.get("max_posts_per_day", {}).get(platform, 10))
     gap_min = float(posting.get("min_gap_minutes", 45))
@@ -105,8 +105,25 @@ def _slots(db: DB, cfg: dict, platform: str, account: str, now: float) -> Iterat
         if len(window) >= cap:
             t = window[len(window) - cap] + 86400  # when enough of the last day's posts age out
             why = f"daily limit reached ({cap} uploads per 24h)"
+        if platform != "export" and (later := _after_quiet(cfg, t)) != t:
+            t, why = later, why or "outside posting hours"
         times.append(t)
         yield t, why
+
+
+def _after_quiet(cfg: dict, t: float) -> float:
+    """The first moment at or after t that isn't in [posting].quiet_hours."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    quiet = set(cfg["posting"].get("quiet_hours", []))
+    tz = ZoneInfo(cfg["posting"].get("timezone", "UTC"))
+    for _ in range(25):
+        dt = datetime.fromtimestamp(t, tz)
+        if dt.hour not in quiet:
+            return t
+        t = dt.replace(minute=0, second=0, microsecond=0).timestamp() + 3600
+    return t
 
 
 def _dur(sec: float) -> str:
@@ -238,7 +255,7 @@ def _post_once(db: DB, cfg: dict) -> list[str]:
             camp = guardrails.campaign_for(cfg, ch)
             meta = PostMeta(
                 title=clip["title"] or f"GTA 6 clip #{clip['id']}",
-                caption=clip["caption"],
+                caption=with_question(clip["caption"] or "", clip["id"]),
                 hashtags=with_required_tags(ch, camp, clip["hashtags"]),
                 is_paid_promotion=bool(camp and camp.get("paid_promotion", True)),
                 clip_id=clip["id"],
